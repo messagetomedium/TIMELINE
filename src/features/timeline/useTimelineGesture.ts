@@ -27,9 +27,10 @@ interface Props {
   readonly setCamera: Dispatch<SetStateAction<TimelineCamera>>;
   readonly onCommit: (document: ProjectDocument) => void;
   readonly onError: (message: string) => void;
+  readonly onStageClick: (id: StageMarkerId) => void;
 }
 
-export function useTimelineGesture({ document, camera, step, surface, body, setCamera, onCommit, onError }: Props) {
+export function useTimelineGesture({ document, camera, step, surface, body, setCamera, onCommit, onError, onStageClick }: Props) {
   const gesture = useRef<Gesture | null>(null);
   const [preview, setPreview] = useState<ProjectDocument | null>(null);
   const [active, setActive] = useState<'pan' | 'edit' | null>(null);
@@ -99,6 +100,7 @@ export function useTimelineGesture({ document, camera, step, surface, body, setC
     if (!current || current.pointerId !== event.pointerId) return;
     gesture.current = null;
     if (current.last?.ok) onCommit(current.last.document);
+    if (!current.last && current.operation?.kind === 'stage') onStageClick(current.operation.id);
     setPreview(null); setActive(null); setInvalid(false);
     if (surface.current?.hasPointerCapture(event.pointerId)) surface.current.releasePointerCapture(event.pointerId);
   };

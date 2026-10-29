@@ -38,6 +38,8 @@ test.beforeEach(async ({ page }) => {
   await page.goto('./');
   await expect(page.getByRole('main', { name: 'Редактор таймлайна' })).toBeVisible();
   await expect(entity(page, processId)).toBeVisible();
+  // Preserve the V1 gesture suite in an explicit overview where both edges fit.
+  await page.getByRole('button', { name: 'Весь проект', exact: true }).click();
 });
 
 test('opens a populated Russian editor, without external requests or console errors', async ({ page }) => {
@@ -216,10 +218,13 @@ test('hover highlights linked people; demo reload is explicitly ephemeral', asyn
 
 test('captures the real workspace at 1440×900 and 1920×1080', async ({ page }) => {
   await mkdir('docs/screenshots', { recursive: true });
+  await page.reload();
   await page.mouse.move(10, 10);
-  await page.screenshot({ path: 'docs/screenshots/timeline-v2-first.png' });
+  await page.screenshot({ path: 'docs/screenshots/calendar-v1-1-work-1440.png' });
+  await page.getByRole('button', { name: 'Весь проект', exact: true }).click();
+  await page.screenshot({ path: 'docs/screenshots/calendar-v1-1-project-1440.png' });
   await page.setViewportSize({ width: 1920, height: 1080 });
   await page.reload();
   await expect(page.getByLabel('Свойства элемента')).toBeVisible();
-  await page.screenshot({ path: 'docs/screenshots/timeline-v2-wide.png' });
+  await page.screenshot({ path: 'docs/screenshots/calendar-v1-1-work-1920.png' });
 });
