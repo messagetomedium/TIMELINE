@@ -8,6 +8,23 @@ export interface TimelineCamera {
   readonly panX: number;
 }
 
+export const WORK_ZOOM = 14;
+
+/** Coordinates are relative to the time viewport; the fixed gutter is never added. */
+export function cameraForFocusDate(camera: TimelineCamera, date: DateOnly, viewportWidth: number, focusRatio = 0.5, zoom = camera.pxPerDay): TimelineCamera {
+  return { ...camera, pxPerDay: zoom, panX: viewportWidth * focusRatio - daysBetween(camera.originDate, date) * zoom };
+}
+
+/** Explicit overview only. Window resizing must not call this function. */
+export function cameraForFitRange(camera: TimelineCamera, range: DateInterval, viewportWidth: number, padding = 24): TimelineCamera {
+  const zoom = Math.max(1.5, Math.min(48, (viewportWidth - padding * 2) / daysBetween(range.startDate, range.endDateExclusive)));
+  return { ...camera, pxPerDay: zoom, panX: padding - daysBetween(camera.originDate, range.startDate) * zoom };
+}
+
+export function nextGridDate(date: DateOnly, step: GridStep): DateOnly {
+  return step === '1mo' ? addMonths(date, 1) : addDays(date, { '1d': 1, '2d': 2, '3d': 3, '1w': 7, '2w': 14 }[step]);
+}
+
 export function xForDate(date: DateOnly, camera: TimelineCamera): number {
   return camera.panX + daysBetween(camera.originDate, date) * camera.pxPerDay;
 }
@@ -58,7 +75,7 @@ export function gridDates(width: number, camera: TimelineCamera, step: GridStep)
   let date = snapDate(range.startDate, step, 'floor');
   while (date <= range.endDateExclusive && result.length < 1500) {
     result.push(date);
-    date = step === '1mo' ? addMonths(date, 1) : addDays(date, { '1d': 1, '2d': 2, '3d': 3, '1w': 7, '2w': 14 }[step]);
+    date = nextGridDate(date, step);
   }
   return result;
 }

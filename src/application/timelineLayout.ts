@@ -1,4 +1,11 @@
-import type { ProcessId, ProjectDocument } from '../domain';
+import type { DateInterval, ProcessId, ProjectDocument } from '../domain';
+
+/** Include edited work outside explicit project bounds when fitting the scene. */
+export function scheduleRange(document: ProjectDocument): DateInterval {
+  const starts = [document.project.startDate, ...document.processes.map((item) => item.startDate), ...document.stageMarkers.map((item) => item.date)];
+  const ends = [document.project.endDateExclusive, ...document.processes.map((item) => item.endDateExclusive), ...document.stageMarkers.map((item) => item.date)];
+  return { startDate: starts.reduce((a, b) => a < b ? a : b), endDateExclusive: ends.reduce((a, b) => a > b ? a : b) };
+}
 
 export interface TimelineRow {
   readonly id: string;
