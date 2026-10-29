@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { containsInterval, dateOnly, isDateOnly, overlaps } from './dates';
 import {
   assignmentIdSchema, laneIdSchema, personIdSchema, processIdSchema,
-  projectIdSchema, stageMarkerIdSchema, taskIdSchema,
+  projectIdSchema, stageMarkerIdSchema, stageBandIdSchema, taskIdSchema,
 } from './ids';
 
 export const SCHEMA_VERSION = 1;
@@ -32,6 +32,12 @@ export const projectSchema = z.strictObject({
 
 export const stageMarkerSchema = z.strictObject({
   id: stageMarkerIdSchema, projectId: projectIdSchema, title: text, date: dateOnlySchema, sortIndex: index,
+}).readonly();
+
+/** Neighbouring visual regions share marker IDs; stages never own processes. */
+export const stageBandSchema = z.strictObject({
+  id: stageBandIdSchema, projectId: projectIdSchema, title: text,
+  leftBoundaryId: stageMarkerIdSchema, rightBoundaryId: stageMarkerIdSchema, sortIndex: index,
 }).readonly();
 
 export const laneSchema = z.discriminatedUnion('kind', [
@@ -81,6 +87,7 @@ export const projectDocumentSchema = z.strictObject({
   schemaVersion: z.literal(SCHEMA_VERSION),
   project: projectSchema,
   stageMarkers: z.array(stageMarkerSchema).readonly(),
+  stageBands: z.array(stageBandSchema).default([]).readonly(),
   lanes: z.array(laneSchema).readonly(),
   processes: z.array(processSchema).readonly(),
   tasks: z.array(taskSchema).readonly(),
@@ -91,7 +98,7 @@ export const projectDocumentSchema = z.strictObject({
   const issue = (path: (string | number)[], message: string) => { context.addIssue({ code: 'custom', path, message }); };
   const ids = new Set<string>();
   ids.add(document.project.id);
-  for (const key of ['stageMarkers', 'lanes', 'processes', 'tasks', 'people', 'assignments'] as const) {
+  for (const key of ['stageMarkers', 'stageBands', 'lanes', 'processes', 'tasks', 'people', 'assignments'] as const) {
     document[key].forEach((entity, position) => {
       if (ids.has(entity.id)) issue([key, position, 'id'], 'Duplicate stable ID');
       ids.add(entity.id);
@@ -105,6 +112,12 @@ export const projectDocumentSchema = z.strictObject({
   const tasks = new Map(document.tasks.map((entity) => [entity.id, entity]));
   const people = new Set(document.people.map((entity) => entity.id));
   const assignments: ReadonlySet<string> = new Set(document.assignments.map((entity) => entity.id));
+  const markers = new Map(document.stageMarkers.map((entity) => [entity.id, entity]));
+  document.stageBands.forEach((band, position) => {
+    const left = markers.get(band.leftBoundaryId);
+    const right = markers.get(band.rightBoundaryId);
+    if (!left || !right || left.date >= right.date) issue(['stageBands', position], 'Stage boundaries must exist and be ordered');
+  });
 
   document.lanes.forEach((lane, position) => {
     if (lane.kind === 'task' && !processes.has(lane.processId)) issue(['lanes', position, 'processId'], 'Unknown lane process');
@@ -157,6 +170,8 @@ export const projectDocumentSchema = z.strictObject({
 
 export type Project = z.infer<typeof projectSchema>;
 export type StageMarker = z.infer<typeof stageMarkerSchema>;
+export type StageBand = z.infer<typeof stageBandSchema>;
+export type GridStep = z.infer<typeof gridStepSchema>;
 export type Lane = z.infer<typeof laneSchema>;
 export type Process = z.infer<typeof processSchema>;
 export type Task = z.infer<typeof taskSchema>;

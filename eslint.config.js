@@ -23,6 +23,7 @@ export default tseslint.config(
   },
   {
     files: ['src/application/**/*.ts'],
+    ignores: ['**/*.test.ts'],
     rules: { 'no-restricted-imports': ['error', { patterns: ['react', 'react-dom*', '**/infrastructure/**', '**/features/**', '**/app/**'] }] },
   },
   {
