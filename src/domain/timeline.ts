@@ -17,7 +17,7 @@ export function cameraForFocusDate(camera: TimelineCamera, date: DateOnly, viewp
 
 /** Explicit overview only. Window resizing must not call this function. */
 export function cameraForFitRange(camera: TimelineCamera, range: DateInterval, viewportWidth: number, padding = 24): TimelineCamera {
-  const zoom = Math.max(1.5, Math.min(48, (viewportWidth - padding * 2) / daysBetween(range.startDate, range.endDateExclusive)));
+  const zoom = Math.max(Number.EPSILON, Math.min(48, (viewportWidth - padding * 2) / daysBetween(range.startDate, range.endDateExclusive)));
   return { ...camera, pxPerDay: zoom, panX: padding - daysBetween(camera.originDate, range.startDate) * zoom };
 }
 

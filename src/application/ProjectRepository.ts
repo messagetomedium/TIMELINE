@@ -1,6 +1,7 @@
 import type { Project, ProjectDocument, ProjectId } from '../domain';
 
-/** Port for future local persistence. No implementation or sync is implied.
+/** Atomic project aggregate port, implemented by the local IndexedDB adapter.
+ * No server or cross-device synchronization is implied.
  * Writes must be issued by application commands, never by React components.
  */
 export interface ProjectRepository {
