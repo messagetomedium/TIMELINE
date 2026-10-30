@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { dateOnlySchema, gridStepSchema } from '../../domain';
-import type { GridStep, ProcessId, ProjectDocument, StageMarkerId } from '../../domain';
+import type { GridStep, ProcessId, ProjectDocument, ProjectId, StageMarkerId, ViewPreferences } from '../../domain';
 import { cameraForFitRange, cameraForFocusDate, getVisibleDateRange, widthForInterval, WORK_ZOOM, xForDate, zoomCamera } from '../../domain/timeline';
 import { getCalendarGeometry, visibleYears } from '../../domain/calendar';
 import type { TimelineCamera } from '../../domain/timeline';
@@ -14,14 +14,19 @@ import { TimelineBar } from './TimelineBar';
 import { useTimelineGesture } from './useTimelineGesture';
 import { useLocalToday } from './useLocalToday';
 import { StageDateEditor } from './StageDateEditor';
+import { CreateWorkDialog } from './CreateWorkDialog';
+import type { WorkInput } from '../../application/workspace/projectOperations';
 import '../../styles/timeline.css';
 
 interface Props {
   readonly document: ProjectDocument;
   readonly onCommit: (document: ProjectDocument) => void;
+  readonly initialView: ViewPreferences | undefined;
+  readonly onViewChange: (id: ProjectId, view: ViewPreferences) => void;
+  readonly onCreateWork: (id: ProjectId, kind: 'process' | 'task', input: WorkInput, parent: ProcessId | null) => Promise<ProjectDocument | null>;
 }
 
-export function TimelineWorkspace({ document, onCommit }: Props) {
+export function TimelineWorkspace({ document, onCommit, initialView, onViewChange, onCreateWork }: Props) {
   const surface = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLDivElement>(null);
   const timeViewport = useRef<HTMLDivElement>(null);
@@ -29,10 +34,14 @@ export function TimelineWorkspace({ document, onCommit }: Props) {
   const today = useLocalToday();
   const initialFocus = today >= document.project.startDate && today < document.project.endDateExclusive ? today : document.project.startDate;
   const [width, setWidth] = useState(960);
-  const [camera, setCamera] = useState<TimelineCamera>(() => cameraForFocusDate({ originDate: document.project.startDate, pxPerDay: WORK_ZOOM, panX: 0 }, initialFocus, 960, 0.32));
-  const [step, setStep] = useState<GridStep>('1w');
-  const [weekends, setWeekends] = useState(true);
-  const [expanded, setExpanded] = useState<ReadonlySet<ProcessId>>(() => new Set(document.viewPreferences.expandedProcessIds));
+  const [camera, setCamera] = useState<TimelineCamera>(() => initialView ? { originDate: document.project.startDate, pxPerDay: initialView.zoomPxPerDay, panX: initialView.cameraX } : cameraForFocusDate({ originDate: document.project.startDate, pxPerDay: WORK_ZOOM, panX: 0 }, initialFocus, 960, 0.32));
+  const [step, setStep] = useState<GridStep>(initialView?.gridStep ?? '1w');
+  const [weekends, setWeekends] = useState(initialView?.showWeekends ?? true);
+  const [expanded, setExpanded] = useState<ReadonlySet<ProcessId>>(() => new Set(initialView?.expandedProcessIds ?? document.viewPreferences.expandedProcessIds));
+  const [viewReady, setViewReady] = useState(false);
+  const [scrollY, setScrollY] = useState(initialView?.cameraY ?? 0);
+  const [retainedView] = useState(() => ({ expandedAssigneeGroupIds: initialView?.expandedAssigneeGroupIds ?? document.viewPreferences.expandedAssigneeGroupIds, showPeoplePanel: initialView?.showPeoplePanel ?? document.viewPreferences.showPeoplePanel }));
+  const [creating, setCreating] = useState<'process' | 'task' | null>(null);
   const [selection, setSelection] = useState<Selection | null>(() => document.processes[0] ? { kind: 'process', id: document.processes[0].id } : null);
   const [hovered, setHovered] = useState<string | null>(null);
   const [error, setError] = useState('');
@@ -51,13 +60,22 @@ export function TimelineWorkspace({ document, onCommit }: Props) {
       if (!entry) return;
       setWidth(entry.contentRect.width);
       if (!initialized.current) {
-        setCamera((previous) => cameraForFocusDate(previous, initialFocus, entry.contentRect.width, 0.32, WORK_ZOOM));
+        if (!initialView) setCamera((previous) => cameraForFocusDate(previous, initialFocus, entry.contentRect.width, 0.32, WORK_ZOOM));
+        if (body.current && initialView) body.current.scrollTop = initialView.cameraY;
         initialized.current = true;
+        setViewReady(true);
       }
     });
     observer.observe(element);
     return () => { observer.disconnect(); };
-  }, [initialFocus]);
+  }, [initialFocus, initialView]);
+
+  useEffect(() => {
+    if (viewReady && !gesture.active) onViewChange(document.project.id, {
+      projectId: document.project.id, gridStep: step, zoomPxPerDay: camera.pxPerDay, cameraX: camera.panX, cameraY: scrollY,
+      showWeekends: weekends, expandedProcessIds: [...expanded], ...retainedView,
+    });
+  }, [viewReady, gesture.active, document.project.id, step, camera, scrollY, weekends, expanded, retainedView, onViewChange]);
 
   const select = (target: Selection) => {
     setSelection(target);
@@ -81,6 +99,7 @@ export function TimelineWorkspace({ document, onCommit }: Props) {
     return null;
   };
   const selectedItem = selection?.kind === 'process' ? sceneDocument.processes.find((item) => item.id === selection.id) : sceneDocument.tasks.find((item) => item.id === selection?.id);
+  const activeProcess = selection?.kind === 'process' ? document.processes.find((item) => item.id === selection.id) : document.processes.find((item) => 'processId' in (selectedItem ?? {}) && selectedItem && 'processId' in selectedItem && item.id === selectedItem.processId) ?? document.processes[0];
   return <main className="timeline-workspace" aria-label="Редактор таймлайна" data-project-revision={document.project.revision} data-px-per-day={camera.pxPerDay} data-pan-x={camera.panX}>
     <div className={`timeline-surface ${gesture.active ? `gesture-${gesture.active}` : ''} ${gesture.invalid ? 'invalid-gesture' : ''}`} ref={surface}
       onPointerDown={gesture.startPan} onPointerMove={gesture.onPointerMove} onPointerUp={gesture.onPointerUp} onPointerCancel={gesture.onPointerCancel} onLostPointerCapture={gesture.onLostPointerCapture}>
@@ -90,11 +109,12 @@ export function TimelineWorkspace({ document, onCommit }: Props) {
       <div className="stage-row"><div className="section-gutter stage-gutter" data-interactive>Этапы</div>
         <StageBand document={sceneDocument} camera={camera} width={width} calendar={calendar} weekends={weekends} today={today} onStart={gesture.startStage} onEdit={setEditingStage} />
       </div>
-      <div className="timeline-body" ref={body} aria-label="Производственный план">
+      <div className="timeline-body" ref={body} aria-label="Производственный план" onScroll={(event) => { setScrollY(event.currentTarget.scrollTop); }}>
         <div className="timeline-body-layout" style={{ height: bodyHeight }}>
-        <div className="section-gutter production-gutter" data-interactive><div><strong>Процессы</strong><small>{document.processes.length} процессов · {document.tasks.length} задачи</small></div></div>
+        <div className="section-gutter production-gutter" data-interactive><div><strong>Процессы</strong><small>{document.processes.length} процессов · {document.tasks.length} задачи</small><button className="add-work-button" onClick={() => { setCreating('process'); }}>+ Процесс</button>{activeProcess && <button className="add-work-button" onClick={() => { setCreating('task'); }}>+ Задача</button>}</div></div>
         <div className="timeline-canvas" style={{ height: bodyHeight }}>
           <TimeGrid camera={camera} width={width} height={bodyHeight} calendar={calendar} weekends={weekends} />
+          {document.processes.length === 0 && <div className="empty-editor-note" data-interactive><h2>Чистый лист</h2><p>Календарь готов. Добавьте первый процесс кнопкой «+ Процесс» слева.</p></div>}
           {layout.rows.map((row) => <div key={`${row.id}:${row.processId ?? ''}`} className="lane-divider" style={{ top: row.y + 30 }} />)}
           {layout.groups.map((group) => {
             const process = sceneDocument.processes.find((item) => item.id === group.processId);
@@ -133,5 +153,12 @@ export function TimelineWorkspace({ document, onCommit }: Props) {
       {activeStage && <StageDateEditor key={`${activeStage.id}:${activeStage.date}`} stage={activeStage} left={Math.max(8, Math.min(xForDate(activeStage.date, camera), width - 272))} onApply={applyStageDate} onClose={() => { setEditingStage(null); }} />}
     </div>
     <DetailsInspector key={`${selection?.id ?? 'none'}:${selectedItem?.title ?? ''}`} document={sceneDocument} selection={selection} onRename={rename} />
+    {creating && <CreateWorkDialog document={document} kind={creating} parentId={creating === 'task' ? activeProcess?.id ?? null : null} onClose={() => { setCreating(null); }} onSubmit={async (input) => {
+      const result = await onCreateWork(document.project.id, creating, input, creating === 'task' ? activeProcess?.id ?? null : null);
+      if (!result) return false;
+      if (creating === 'process') { const added = result.processes.find((item) => !document.processes.some((before) => before.id === item.id)); if (added) select({ kind: 'process', id: added.id }); }
+      else if (activeProcess) setExpanded((previous) => new Set([...previous, activeProcess.id]));
+      return true;
+    }} />}
   </main>;
 }

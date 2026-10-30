@@ -44,7 +44,7 @@ export function TimelineBar({ item, target, camera, viewportWidth, y, color, sel
           event.stopPropagation();
           if (event.key === 'Escape') setEditing(false);
           if (event.key === 'Enter') { onRename(target, draft); setEditing(false); }
-        }} /> : <span className="bar-title" style={{ paddingLeft: visibleInset + 24 }} onDoubleClick={(event) => { event.stopPropagation(); setDraft(item.title); setEditing(true); }}>{item.title}</span>}
+        }} /> : <span className="bar-title" style={{ position: 'absolute', left: visibleInset + 24, right: target.kind === 'process' ? rightInset + 16 : inView ? Math.max(6, xForDate(item.endDateExclusive, camera) - viewportWidth + 6) : 6, width: 'auto', padding: 0 }} onDoubleClick={(event) => { event.stopPropagation(); setDraft(item.title); setEditing(true); }}>{item.title}</span>}
       {toggle && <button className="expand-handle" style={{ right: rightInset }} aria-label={`${expanded ? 'Свернуть' : 'Раскрыть'}: ${item.title}`} aria-expanded={expanded}
         onClick={(event) => { event.stopPropagation(); toggle(); }}>{expanded ? '⌃' : '⌄'}</button>}
       <button className="resize-handle end" aria-label={`Изменить окончание: ${item.title}`} onPointerDown={(event) => { onGesture(event, target, 'end'); }} />

@@ -36,6 +36,7 @@ async function schedule(page: Page) {
 
 test.beforeEach(async ({ page }) => {
   await page.goto('./');
+  await page.getByRole('button', { name: 'Открыть', exact: true }).first().click();
   await expect(page.getByRole('main', { name: 'Редактор таймлайна' })).toBeVisible();
   await expect(entity(page, processId)).toBeVisible();
   // Preserve the V1 gesture suite in an explicit overview where both edges fit.
@@ -75,7 +76,7 @@ test('keeps multiple processes expanded and switches projects without losing ses
   await expect(page.getByRole('button', { name: 'Процесс: Сценарий: новая версия', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Проекты', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Проекты', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: /Демонстрационный проект Сказки Амура/ }).click();
+  await page.getByRole('button', { name: 'Открыть', exact: true }).first().click();
   await expect(page.getByRole('button', { name: 'Процесс: Сценарий: новая версия', exact: true })).toBeVisible();
 });
 
@@ -201,30 +202,30 @@ test('rejects a colliding resize and moves a stage independently', async ({ page
   expect(await schedule(page)).toEqual(before);
 });
 
-test('hover highlights linked people; demo reload is explicitly ephemeral', async ({ page }) => {
+test('hover highlights linked people and edits persist after reload', async ({ page }) => {
   await entity(page, taskId).hover();
   await expect(page.locator('.performer-row[data-highlighted="true"]')).toHaveCount(1);
   await expect(page.locator(`.performer-segment[data-target-id="${taskId}"]`)).toHaveClass(/linked/);
-  await expect(page.getByText('Демо работает в этой вкладке.', { exact: false })).toBeVisible();
+  await expect(page.getByText('Изменения сохраняются в этом браузере.', { exact: false })).toBeVisible();
   await entity(page, taskId).locator('.bar-title').dblclick();
   await page.getByRole('textbox', { name: 'Название на полосе' }).fill('Изменение в сеансе');
   await page.getByRole('textbox', { name: 'Название на полосе' }).press('Enter');
   await expect(entity(page, taskId).locator('.bar-title')).toHaveText('Изменение в сеансе');
   await page.reload();
-  await expect(entity(page, taskId).locator('.bar-title')).toHaveText('Поиск образов');
+  await expect(entity(page, taskId).locator('.bar-title')).toHaveText('Изменение в сеансе');
   expect(await page.evaluate(() => localStorage.length)).toBe(0);
-  expect(await page.evaluate(async () => (await indexedDB.databases()).length)).toBe(0);
+  expect(await page.evaluate(async () => (await indexedDB.databases()).length)).toBeGreaterThan(0);
 });
 
 test('captures the real workspace at 1440×900 and 1920×1080', async ({ page }) => {
   await mkdir('docs/screenshots', { recursive: true });
   await page.reload();
   await page.mouse.move(10, 10);
-  await page.screenshot({ path: 'docs/screenshots/calendar-v1-1-work-1440.png' });
+  await page.screenshot({ path: 'test-results/editor-regression-work-1440.png' });
   await page.getByRole('button', { name: 'Весь проект', exact: true }).click();
-  await page.screenshot({ path: 'docs/screenshots/calendar-v1-1-project-1440.png' });
+  await page.screenshot({ path: 'test-results/editor-regression-project-1440.png' });
   await page.setViewportSize({ width: 1920, height: 1080 });
   await page.reload();
   await expect(page.getByLabel('Свойства элемента')).toBeVisible();
-  await page.screenshot({ path: 'docs/screenshots/calendar-v1-1-work-1920.png' });
+  await page.screenshot({ path: 'test-results/editor-regression-work-1920.png' });
 });

@@ -37,6 +37,7 @@ async function checkColumns(page: Page) {
 test.beforeEach(async ({ page }) => {
   await page.clock.install({ time: new Date('2026-10-29T09:00:00Z') });
   await page.goto('./');
+  await page.getByRole('button', { name: 'Открыть', exact: true }).first().click();
   await expect(page.getByRole('main')).toHaveAttribute('data-px-per-day', '14');
 });
 
@@ -218,9 +219,13 @@ test('1280, 1440 and 1920 layouts keep readable cells, aligned month boundaries 
   }
 });
 
-test('outside the project, initial focus uses the project start and Today still navigates without changing the schedule', async ({ page }) => {
-  await page.clock.setFixedTime(new Date('2030-06-15T09:00:00Z'));
-  await page.reload();
+test('outside the project, initial focus uses the project start and Today still navigates without changing the schedule', async ({ browser }) => {
+  // A first visit has no saved camera; existing users retain their saved view.
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, timezoneId: 'Europe/Moscow' });
+  const page = await context.newPage();
+  await page.clock.install({ time: new Date('2030-06-15T09:00:00Z') });
+  await page.goto('http://127.0.0.1:4173/');
+  await page.getByRole('button', { name: 'Открыть', exact: true }).first().click();
   const original = await schedule(page);
   const viewport = await rect(page.locator('.calendar-time'));
   const start = await rect(page.locator('.stage-grip').first());
@@ -230,4 +235,5 @@ test('outside the project, initial focus uses the project start and Today still 
   expect(await x(page.locator('.timeline-canvas .today-line')) - viewport.x).toBeCloseTo(viewport.width / 2, 1);
   await expect(page.locator('.calendar-gutter')).toContainText('2030');
   expect(await schedule(page)).toEqual(original);
+  await context.close();
 });

@@ -76,5 +76,5 @@ export const productionDemo = projectDocumentSchema.parse({
     ['Александра Волкова', 'Арт-директор'], ['Михаил Орлов', 'Продюсер'], ['Анна Смирнова', 'Художник'], ['Иван Морозов', 'Художник'],
     ['Елена Ким', 'Аниматор'], ['Павел Соколов', 'Режиссёр'], ['Мария Лебедева', 'Композитор'], ['Денис Белов', 'Монтажёр'],
   ].map(([displayName, defaultRole], index) => ({ id: id(16, index + 1), displayName, defaultRole, createdAt: timestamp, updatedAt: timestamp })),
-  viewPreferences: { projectId, gridStep: '1w', zoomPxPerDay: 3, cameraX: 24, cameraY: 0, showWeekends: true, expandedProcessIds: [id(14, 1), id(14, 2)], expandedAssigneeGroupIds: [], showPeoplePanel: true },
+  viewPreferences: { projectId, gridStep: '1w', zoomPxPerDay: 14, cameraX: 24, cameraY: 0, showWeekends: true, expandedProcessIds: [id(14, 1), id(14, 2)], expandedAssigneeGroupIds: [], showPeoplePanel: true },
 });

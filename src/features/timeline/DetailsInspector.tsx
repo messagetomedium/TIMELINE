@@ -29,6 +29,6 @@ export function DetailsInspector({ document, selection, onRename }: { readonly d
       })}
     </div>
     <div className="inspector-help"><strong>Работа с планом</strong><p>Двойной клик — название.<br />Ручка ⠿ — перенос.<br />Край полосы — длительность.<br />Пустой фон или средняя кнопка — панорама.<br />Esc — отмена жеста.</p></div>
-    <p className="memory-notice">Демо работает в этой вкладке. Изменения сбросятся при обновлении страницы.</p>
+    <p className="memory-notice">Изменения сохраняются в этом браузере. Для переноса на другое устройство сделайте JSON-бэкап во вкладке «Проекты».</p>
   </aside>;
 }
