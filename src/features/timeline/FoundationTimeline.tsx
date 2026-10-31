@@ -639,21 +639,13 @@ function FoundationInspector({
               }}
             />
             {target.kind === "process" && "color" in item && (
-              <label className="inspector-label color-field">
-                Цвет процесса
-                <input
-                  aria-label="Цвет процесса"
-                  type="color"
-                  value={item.color}
-                  onChange={(e) => {
-                    void onCommand({
-                      type: "SetProcessColor",
-                      id: target.id,
-                      color: e.target.value,
-                    });
-                  }}
-                />
-              </label>
+              <ProcessColor
+                key={item.color}
+                value={item.color}
+                onCommit={(color) =>
+                  onCommand({ type: "SetProcessColor", id: target.id, color })
+                }
+              />
             )}
             <AssignmentControl
               key={`${target.id}:${snapshot.assignments.find((a) => a.targetId === target.id)?.id ?? "none"}`}
@@ -906,5 +898,59 @@ function CheckpointTiming({
         Сохранить чекпойнт
       </button>
     </form>
+  );
+}
+
+function ProcessColor({
+  value,
+  onCommit,
+}: {
+  value: string;
+  onCommit: (color: string) => Promise<boolean>;
+}) {
+  const [draft, setDraft] = useState(value),
+    sent = useRef(value),
+    cancelled = useRef(false);
+  const commit = () => {
+    if (!cancelled.current && draft !== sent.current) {
+      sent.current = draft;
+      void onCommit(draft).then((ok) => {
+        if (!ok) {
+          sent.current = value;
+          setDraft(value);
+        }
+      });
+    }
+  };
+  return (
+    <label className="inspector-label color-field">
+      Цвет процесса
+      <input
+        aria-label="Цвет процесса"
+        type="color"
+        value={draft}
+        onChange={(e) => {
+          cancelled.current = false;
+          setDraft(e.target.value);
+        }}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            e.stopPropagation();
+            commit();
+            e.currentTarget.blur();
+          }
+          if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            cancelled.current = true;
+            setDraft(value);
+            e.currentTarget.blur();
+          }
+        }}
+      />
+      <small>Enter или клик вне поля — применить; Esc — отменить</small>
+    </label>
   );
 }

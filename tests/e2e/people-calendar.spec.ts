@@ -597,6 +597,40 @@ test("work inspector applies two date edges with the complete cascade in one per
   expect(semantic(await current(page))).toBe(semantic(before));
   await undo(page, true);
   expect(semantic(await current(page))).toBe(semantic(next));
+  const beforeColor=await current(page);
+  const process = required(beforeColor.processes[0]);
+  await entity(page, process.id).click();
+  const color = page.getByLabel("Цвет процесса", { exact: true });
+  const preview = async (value: string) => {
+    await color.evaluate((el, value) => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )?.set?.call(el, value);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    }, value);
+  };
+  await color.focus();
+  await preview("#224466");
+  await preview("#334477");
+  expect(await current(page)).toEqual(beforeColor);
+  await color.press("Escape");
+  expect(await current(page)).toEqual(beforeColor);
+  await color.focus();
+  await preview("#445588");
+  await preview("#556699");
+  await color.press("Enter");
+  await saved(page);
+  const colored = await current(page);
+  expect(required(colored.processes[0]).color).toBe("#556699");
+  expect(colored.project.revision).toBe(beforeColor.project.revision + 1);
+  await color.press("Enter");
+  await saved(page);
+  expect(await current(page)).toEqual(colored);
+  await page.reload();
+  await saved(page);
+  await undo(page);
+  expect(semantic(await current(page))).toBe(semantic(next));
 });
 test("person names require confirmation after blur, Esc cancels and no-op saves retain workspace Redo", async ({
   page,
