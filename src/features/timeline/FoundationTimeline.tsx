@@ -2,10 +2,16 @@ import { useState } from "react";
 import { addDays, dateOnlySchema } from "../../domain";
 import { displayDocument, checkpointDate } from "../../domain/v2/model";
 import type { Snapshot } from "../../domain/v2/model";
-import { applyCommand } from "../../domain/v2/commands";
-import type { ContentCommand } from "../../domain/v2/commands";
+import { planCommand } from "../../domain/v2/commands";
 import type { Selection } from "../../application/timelineCommands";
-import type { ViewPreferences, ProjectId } from "../../domain";
+import type { ViewPreferences, ProjectId, StageMarkerId } from "../../domain";
+import { stageMarkerIdSchema } from "../../domain";
+import {
+  InsertStageDialog,
+  StageActions,
+  DateCommandField,
+} from "./StageControls";
+import type { StageBoundary, SendCommand } from "./StageControls";
 import { TimelineWorkspace } from "./TimelineWorkspace";
 import { layoutTimeline } from "../../application/timelineLayout";
 import { xForDate, widthForInterval } from "../../domain/timeline";
@@ -21,7 +27,7 @@ export function FoundationTimeline({
   onView,
 }: {
   snapshot: Snapshot;
-  onCommand: (c: ContentCommand) => Promise<boolean>;
+  onCommand: SendCommand;
   onUndo: () => void;
   onRedo: () => void;
   history: { canUndo: boolean; canRedo: boolean };
@@ -30,151 +36,236 @@ export function FoundationTimeline({
 }) {
   const [special, setSpecial] = useState<Special | null>(null);
   const document = displayDocument(snapshot);
+  const [inserting, setInserting] = useState<StageBoundary | null>(null);
+  const stageIds = new Set(snapshot.stages.map((s) => s.id));
+  const currentSpecial =
+    special?.kind === "stage" && !stageIds.has(special.id)
+      ? { kind: "project" as const, id: snapshot.project.id }
+      : special;
   return (
-    <TimelineWorkspace
-      document={document}
-      initialView={view}
-      onViewChange={onView}
-      onCommit={() => {
-        throw Error("V2 requires a command");
-      }}
-      onCreateWork={() => Promise.resolve(null)}
-      foundation={{
-        layout: (d, expanded) => {
-          const parts = snapshot.stages.map((s) => {
-            const processes = d.processes.filter(
-              (p) =>
-                snapshot.processes.find((x) => x.id === p.id)?.stageId === s.id,
-            );
-            const ids = new Set(processes.map((p) => p.id));
-            return layoutTimeline(
-              {
-                ...d,
-                processes,
-                lanes: d.lanes.filter((l) =>
-                  l.kind === "process"
-                    ? processes.some((p) => p.laneId === l.id)
-                    : ids.has(l.processId),
-                ),
-              },
-              expanded,
-            );
-          });
-          return {
-            rows: parts.flatMap((p) => p.rows),
-            groups: parts.flatMap((p) => p.groups),
-            height: Math.max(...parts.map((p) => p.height)),
-          };
-        },
-        evaluate: (_, command) => {
-          try {
+    <>
+      {" "}
+      <TimelineWorkspace
+        document={document}
+        initialView={view}
+        onViewChange={onView}
+        onCommit={() => {
+          throw Error("V2 requires a command");
+        }}
+        onCreateWork={() => Promise.resolve(null)}
+        foundation={{
+          layout: (d, expanded) => {
+            const parts = snapshot.stages.map((s) => {
+              const processes = d.processes.filter(
+                (p) =>
+                  snapshot.processes.find((x) => x.id === p.id)?.stageId ===
+                  s.id,
+              );
+              const ids = new Set(processes.map((p) => p.id));
+              return layoutTimeline(
+                {
+                  ...d,
+                  processes,
+                  lanes: d.lanes.filter((l) =>
+                    l.kind === "process"
+                      ? processes.some((p) => p.laneId === l.id)
+                      : ids.has(l.processId),
+                  ),
+                },
+                expanded,
+              );
+            });
             return {
-              ok: true,
-              document: displayDocument(
-                applyCommand(snapshot, { type: "Timeline", command }),
-              ),
+              rows: parts.flatMap((p) => p.rows),
+              groups: parts.flatMap((p) => p.groups),
+              height: Math.max(...parts.map((p) => p.height)),
             };
-          } catch (e) {
-            return {
-              ok: false,
-              error: e instanceof Error ? e.message : "Изменение отклонено",
-            };
-          }
-        },
-        onCommand: (command) => {
-          void onCommand({ type: "Timeline", command });
-        },
-        onSelect: () => {
-          setSpecial(null);
-        },
-        stages: (camera, width) => (
-          <div className="stage-band" aria-label="Этапы производства">
-            {snapshot.stages.map((s, i) => {
-              const left = xForDate(s.startDate, camera);
-              return (
-                <div
-                  className={`stage-region stage-color-${String(i % 4)}`}
-                  key={s.id}
-                  style={{ left, width: widthForInterval(s, camera) }}
-                >
+          },
+          evaluate: (_, command) => {
+            try {
+              const plan = planCommand(snapshot, { type: "Timeline", command });
+              return {
+                ok: true,
+                document: displayDocument(plan.document),
+                snapshot: plan.document,
+                affectedIds: plan.affectedIds,
+              };
+            } catch (e) {
+              return {
+                ok: false,
+                error: e instanceof Error ? e.message : "Изменение отклонено",
+              };
+            }
+          },
+          onCommand: (command, revision) => {
+            void onCommand({ type: "Timeline", command }, revision);
+          },
+          onStageSelect: (id: StageMarkerId) => {
+            setSpecial({ kind: "stage", id });
+          },
+          onSelect: () => {
+            setSpecial(null);
+          },
+          stages: (camera, width, preview, start) => {
+            const scene = preview ?? snapshot,
+              stages = [...scene.stages].sort(
+                (a, b) => a.sortIndex - b.sortIndex,
+              );
+            return (
+              <div
+                className="stage-band foundation-stage-band"
+                aria-label="Этапы производства"
+              >
+                {stages.map((s, i) => {
+                  const left = xForDate(s.startDate, camera);
+                  const affected =
+                    snapshot.stages.find((x) => x.id === s.id)?.revision !==
+                    s.revision;
+                  return (
+                    <div
+                      key={s.id}
+                      className={`stage-region stage-color-${String(i % 4)} ${affected ? "stage-affected" : ""}`}
+                      style={{ left, width: widthForInterval(s, camera) }}
+                    >
+                      <button
+                        data-interactive
+                        className="stage-label-content stage-select"
+                        aria-label={`Этап: ${s.title}`}
+                        style={{ left: Math.max(12, -left), maxWidth: width }}
+                        onClick={() => {
+                          setSpecial({ kind: "stage", id: s.id });
+                        }}
+                      >
+                        <span className="stage-name">{s.title}</span>
+                        <span className="stage-date">
+                          {s.startDate.split("-").reverse().join(".")}
+                        </span>
+                      </button>
+                    </div>
+                  );
+                })}
+                {stages.map((s) => (
                   <button
                     data-interactive
-                    className="stage-label-content stage-select"
-                    aria-label={`Этап: ${s.title}`}
-                    style={{ left: Math.max(0, -left), maxWidth: width }}
+                    className="stage-grip"
+                    data-stage-id={s.id}
+                    data-date={s.startDate}
+                    key={`grip:${s.id}`}
+                    style={{ left: xForDate(s.startDate, camera) }}
+                    aria-label={`Перенести границу: ${s.title}`}
+                    onPointerDown={(e) => {
+                      start(e, stageMarkerIdSchema.parse(s.id));
+                    }}
+                  />
+                ))}
+                {[
+                  ...stages.map((s, i) => ({
+                    date: s.startDate,
+                    leftStageId: stages[i - 1]?.id ?? null,
+                    rightStageId: s.id,
+                  })),
+                  {
+                    date: scene.project.endDateExclusive,
+                    leftStageId: stages.at(-1)?.id ?? null,
+                    rightStageId: null,
+                  },
+                ].map((b) => (
+                  <button
+                    data-interactive
+                    className="insert-stage-button"
+                    key={b.rightStageId ?? "end"}
+                    style={{ left: xForDate(b.date, camera) }}
+                    aria-label={
+                      b.rightStageId
+                        ? `Вставить этап перед: ${stages.find((s) => s.id === b.rightStageId)?.title ?? ""}`
+                        : "Вставить этап в конец"
+                    }
                     onClick={() => {
-                      setSpecial({ kind: "stage", id: s.id });
+                      setInserting({
+                        leftStageId: b.leftStageId,
+                        rightStageId: b.rightStageId,
+                      });
                     }}
                   >
-                    <span className="stage-name">{s.title}</span>
-                    <span className="stage-date">
-                      {s.startDate.split("-").reverse().join(".")}
-                    </span>
+                    +
                   </button>
-                </div>
-              );
-            })}
-          </div>
-        ),
-        checkpoints: (camera) =>
-          snapshot.checkpoints.map((c) => (
-            <button
-              data-interactive
-              key={c.id}
-              className="checkpoint-line"
-              data-checkpoint-id={c.id}
-              data-date={checkpointDate(snapshot, c)}
-              style={{
-                left: xForDate(checkpointDate(snapshot, c), camera) + camera.pxPerDay,
-              }}
-              aria-label={`Чекпойнт: ${c.title}`}
-              onClick={() => {
-                setSpecial({ kind: "checkpoint", id: c.id });
-              }}
-            >
-              <span>
-                ● {c.title}
-                <small>{checkpointDate(snapshot, c)}</small>
-              </span>
-            </button>
-          )),
-        toolbar: (
-          <>
-            <button
-              aria-label="Отменить"
-              disabled={!history.canUndo}
-              onClick={onUndo}
-            >
-              ↶
-            </button>
-            <button
-              aria-label="Повторить"
-              disabled={!history.canRedo}
-              onClick={onRedo}
-            >
-              ↷
-            </button>
-            <button
-              className="navigation-button"
-              onClick={() => {
-                setSpecial({ kind: "project", id: snapshot.project.id });
-              }}
-            >
-              Проект
-            </button>
-            <span className="toolbar-separator" />
-          </>
-        ),
-        inspector: (selection) => (
-          <FoundationInspector
-            key={`${special?.id ?? selection?.id ?? "none"}:${String(snapshot.project.revision)}`}
-            snapshot={snapshot}
-            target={special ?? selection}
-            onCommand={onCommand}
-          />
-        ),
-      }}
-    />
+                ))}
+              </div>
+            );
+          },
+          checkpoints: (camera, preview) => {
+            const scene = preview ?? snapshot;
+            return scene.checkpoints.map((c) => (
+              <button
+                data-interactive
+                key={c.id}
+                className="checkpoint-line"
+                data-checkpoint-id={c.id}
+                data-date={checkpointDate(scene, c)}
+                style={{
+                  left:
+                    xForDate(checkpointDate(scene, c), camera) +
+                    camera.pxPerDay,
+                }}
+                aria-label={`Чекпойнт: ${c.title}`}
+                onClick={() => {
+                  setSpecial({ kind: "checkpoint", id: c.id });
+                }}
+              >
+                <span>
+                  ● {c.title}
+                  <small>{checkpointDate(scene, c)}</small>
+                </span>
+              </button>
+            ));
+          },
+          toolbar: (
+            <>
+              <button
+                aria-label="Отменить"
+                disabled={!history.canUndo}
+                onClick={onUndo}
+              >
+                ↶
+              </button>
+              <button
+                aria-label="Повторить"
+                disabled={!history.canRedo}
+                onClick={onRedo}
+              >
+                ↷
+              </button>
+              <button
+                className="navigation-button"
+                onClick={() => {
+                  setSpecial({ kind: "project", id: snapshot.project.id });
+                }}
+              >
+                Проект
+              </button>
+              <span className="toolbar-separator" />
+            </>
+          ),
+          inspector: (selection, preview) => (
+            <FoundationInspector
+              key={`${currentSpecial?.id ?? selection?.id ?? "none"}:${String(snapshot.project.revision)}`}
+              snapshot={preview ?? snapshot}
+              target={currentSpecial ?? selection}
+              onCommand={onCommand}
+            />
+          ),
+        }}
+      />
+      {inserting && (
+        <InsertStageDialog
+          boundary={inserting}
+          onCommand={onCommand}
+          onClose={() => {
+            setInserting(null);
+          }}
+        />
+      )}
+    </>
   );
 }
 function FoundationInspector({
@@ -184,7 +275,7 @@ function FoundationInspector({
 }: {
   snapshot: Snapshot;
   target: Special | Selection | null;
-  onCommand: (c: ContentCommand) => Promise<boolean>;
+  onCommand: SendCommand;
 }) {
   const checkpoint =
     target?.kind === "checkpoint"
@@ -325,7 +416,10 @@ function FoundationInspector({
           </p>
           <button
             className="primary-button"
-            disabled={!title.trim() || (!anchor && !dateOnlySchema.safeParse(date).success)}
+            disabled={
+              !title.trim() ||
+              (!anchor && !dateOnlySchema.safeParse(date).success)
+            }
             onClick={() => {
               void onCommand({
                 type: "UpdateCheckpoint",
@@ -352,8 +446,43 @@ function FoundationInspector({
       {kind === "process" && item && "stageId" in item && (
         <p>Этап: {snapshot.stages.find((s) => s.id === item.stageId)?.title}</p>
       )}
+      {kind === "stage" && (
+        <StageActions
+          snapshot={snapshot}
+          id={target.id}
+          onCommand={onCommand}
+        />
+      )}
+      {kind === "project" && (
+        <section className="stage-actions">
+          <h3>Границы проекта</h3>
+          <DateCommandField
+            label="Начало проекта"
+            value={snapshot.project.startDate}
+            apply={(date) =>
+              onCommand({ type: "ResizeProject", edge: "start", date })
+            }
+          />
+          <DateCommandField
+            label="Окончание проекта включительно"
+            value={addDays(snapshot.project.endDateExclusive, -1)}
+            apply={(date) =>
+              onCommand({
+                type: "ResizeProject",
+                edge: "end",
+                date: addDays(date, 1),
+              })
+            }
+          />
+          <p className="inspector-note">
+            Изменение границ не переносит работы. Перенос целого проекта — за
+            ручку в портфеле.
+          </p>
+        </section>
+      )}
       <p className="inspector-note">
-        Перенос и изменение длительности доступны внутри своего этапа. Изменение границ этапов и каскадные переносы пока недоступны.
+        Работы толкают соседей в своей строке. Родители расширяются при
+        необходимости; один жест — одна отмена.
       </p>
       <p className="memory-notice">
         Сохранено локально в этом браузере. История отмены действует в текущем

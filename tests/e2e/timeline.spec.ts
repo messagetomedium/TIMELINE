@@ -1,5 +1,4 @@
 import { required } from "../../src/testing/required";
-import { mkdir } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 import {
   create,
@@ -185,7 +184,7 @@ test("preview never writes; Esc, pointercancel and blur cancel; one valid move s
     required(d.processes[0]).startDate,
   );
 });
-test("cross-stage moves and task collisions are rejected without commit", async ({
+test("work crossings ripple through stages and neighbors as one command", async ({
   page,
 }) => {
   const d = await current(page);
@@ -198,8 +197,13 @@ test("cross-stage moves and task collisions are rejected without commit", async 
     }),
     (await scale(page)) * 5,
   );
-  await expect(page.getByRole("alert")).toContainText("своём этапе");
-  expect((await current(page)).project.revision).toBe(0);
+  await saved(page);
+  let next = await current(page);
+  expect(next.project.revision).toBe(1);
+  expect(required(next.stages[0]).endDateExclusive).toBe("2026-11-11");
+  expect(required(next.processes[2]).startDate).toBe("2026-11-11");
+  await page.getByRole("button", { name: "Отменить", exact: true }).click();
+  await saved(page);
   await drag(
     page,
     entity(page, required(d.tasks[0]).id).getByRole("button", {
@@ -208,10 +212,12 @@ test("cross-stage moves and task collisions are rejected without commit", async 
     }),
     await scale(page),
   );
-  await expect(page.getByRole("alert")).toContainText("дорожке");
-  expect((await current(page)).project.revision).toBe(0);
+  await saved(page);
+  next = await current(page);
+  expect(required(next.tasks[1]).startDate).toBe("2026-11-05");
+  expect(required(next.processes[0]).endDateExclusive).toBe("2026-11-07");
 });
-test("task resize grows its process within stage, rejects crossing stage and undo restores one operation", async ({
+test("task resize extends stage and its neighbor and one undo restores the whole operation", async ({
   page,
 }) => {
   const d = await current(page);
@@ -220,16 +226,13 @@ test("task resize grows its process within stage, rejects crossing stage and und
     name: "Изменить окончание: Задача 2",
     exact: true,
   });
-  await drag(page, handle, await scale(page));
+  await drag(page, handle, (await scale(page)) * 5);
   await saved(page);
-  expect(required((await current(page)).tasks[1]).endDateExclusive).toBe(
-    "2026-11-07",
-  );
-  expect(required((await current(page)).processes[0]).endDateExclusive).toBe(
-    "2026-11-07",
-  );
-  await drag(page, handle, (await scale(page)) * 4);
-  expect((await current(page)).project.revision).toBe(1);
+  const next = await current(page);
+  expect(required(next.tasks[1]).endDateExclusive).toBe("2026-11-11");
+  expect(required(next.processes[0]).endDateExclusive).toBe("2026-11-11");
+  expect(required(next.stages[1]).startDate).toBe("2026-11-11");
+  expect(next.project.revision).toBe(1);
   await page.getByRole("button", { name: "Отменить", exact: true }).click();
   await saved(page);
   expect(required((await current(page)).tasks[1]).endDateExclusive).toBe(
@@ -255,16 +258,4 @@ test("external revisions cause an explicit conflict and never get overwritten by
   );
   expect((await current(page)).project.id).toBe(d.project.id);
   await other.close();
-});
-test("captures the actual template and checkpoint inspector at 1440 and 1920", async ({
-  page,
-}) => {
-  await mkdir("docs/screenshots", { recursive: true });
-  await page
-    .getByRole("button", { name: "Чекпойнт: Дедлайн", exact: true })
-    .click();
-  await page.mouse.move(10, 10);
-  await page.screenshot({ path: "docs/screenshots/v1-3a-editor-1440.png" });
-  await page.setViewportSize({ width: 1920, height: 1080 });
-  await page.screenshot({ path: "docs/screenshots/v1-3a-editor-1920.png" });
 });

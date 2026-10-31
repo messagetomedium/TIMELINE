@@ -79,7 +79,7 @@ describe("V2 foundation invariants", () => {
       });
     expect(snapshotSchema.safeParse(d).success).toBe(false);
   });
-  it("allows a bounded move once, rejects cross-stage moves and child truncation atomically", () => {
+  it("moves children once, expands stage on crossing, rejects child truncation", () => {
     const d = make(),
       p = required(d.processes[0]);
     const next = applyCommand(d, {
@@ -90,16 +90,9 @@ describe("V2 foundation invariants", () => {
       addDays(required(d.tasks[0]).startDate, 2),
     );
     expect(required(d.tasks[0]).startDate).toBe(d.project.startDate);
-    expect(() =>
-      applyCommand(d, {
-        type: "Timeline",
-        command: {
-          type: "move",
-          target: { kind: "process", id: p.id },
-          days: 4,
-        },
-      }),
-    ).toThrow();
+    const expanded=applyCommand(d,{type:'Timeline',command:{type:'move',target:{kind:'process',id:p.id},days:4}});
+    expect(required(expanded.stages[0]).endDateExclusive).toBe(addDays(d.project.startDate,8));
+    expect(required(expanded.processes[2]).startDate).toBe(addDays(d.project.startDate,8));
     expect(() =>
       applyCommand(d, {
         type: "Timeline",

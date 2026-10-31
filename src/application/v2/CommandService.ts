@@ -1,7 +1,11 @@
-import { applyCommand,envelopeSchema } from "../../domain/v2/commands";
+import { planCommand, envelopeSchema } from "../../domain/v2/commands";
 import type { CommandEnvelope, ContentCommand } from "../../domain/v2/commands";
 import { createTemplate } from "../../domain/v2/template";
-import { snapshotSchema, WORKSPACE_ID } from "../../domain/v2/model";
+import {
+  snapshotSchema,
+  normalizeView,
+  WORKSPACE_ID,
+} from "../../domain/v2/model";
 import type { Snapshot } from "../../domain/v2/model";
 import type { DateOnly } from "../../domain";
 import type { V2RepositoryPort } from "./ports";
@@ -58,12 +62,13 @@ export class CommandService {
     };
   }
   async execute(input: CommandEnvelope) {
-    const e=envelopeSchema.parse(input);
+    const e = envelopeSchema.parse(input);
     if (e.workspaceId !== WORKSPACE_ID)
       throw Error("Неверное пространство или версия команды");
     const before = await this.source(e.projectId, e.expectedRevision);
-    if(before.project.workspaceId!==e.workspaceId)throw Error("Чужое пространство");
-    const after = applyCommand(before, e.command);
+    if (before.project.workspaceId !== e.workspaceId)
+      throw Error("Чужое пространство");
+    const { document: after } = planCommand(before, e.command);
     if (after === before) return;
     const saved = {
       ...after,
@@ -88,6 +93,25 @@ export class CommandService {
     if (!h || !entry) return;
     const current = await this.source(id, h.revision),
       target = redo ? entry.after : entry.before;
+    const restore = <T extends { id: string; revision: number }>(
+      values: T[],
+      present: T[],
+    ): T[] =>
+      values.map((value) => {
+        const old = present.find((e) => e.id === value.id);
+        const fields = (v: T) =>
+          JSON.stringify(
+            Object.fromEntries(
+              Object.entries(v).filter(([key]) => key !== "revision"),
+            ),
+          );
+        return {
+          ...value,
+          revision: old
+            ? old.revision + (fields(value) === fields(old) ? 0 : 1)
+            : Math.max(value.revision, current.project.revision) + 1,
+        };
+      });
     const next = snapshotSchema.parse({
       ...target,
       project: {
@@ -95,11 +119,12 @@ export class CommandService {
         revision: current.project.revision + 1,
         updatedAt: this.now(),
       },
-      stages: target.stages.map(x=>({...x,revision:(current.stages.find(c=>c.id===x.id)?.revision??x.revision)+1})),
-      processes: target.processes.map(x=>({...x,revision:(current.processes.find(c=>c.id===x.id)?.revision??x.revision)+1})),
-      tasks: target.tasks.map(x=>({...x,revision:(current.tasks.find(c=>c.id===x.id)?.revision??x.revision)+1})),
-      checkpoints: target.checkpoints.map(x=>({...x,revision:(current.checkpoints.find(c=>c.id===x.id)?.revision??x.revision)+1})),
-      viewPreferences: current.viewPreferences,
+      stages: restore(target.stages, current.stages),
+      processes: restore(target.processes, current.processes),
+      tasks: restore(target.tasks, current.tasks),
+      checkpoints: restore(target.checkpoints, current.checkpoints),
+      results: restore(target.results, current.results),
+      viewPreferences: normalizeView(target, current.viewPreferences),
     });
     await this.repository.save(next, current.project.revision);
     this.histories.set(id, {
