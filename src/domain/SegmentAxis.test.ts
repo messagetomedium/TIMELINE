@@ -9,7 +9,7 @@ import {
   anchorPosition,
 } from "./SegmentAxis";
 import type { AxisCamera } from "./SegmentAxis";
-import { widthForInterval, zoomCamera, cameraForFitRange } from "./timeline";
+import { widthForInterval, zoomCamera, cameraForFitRange, getVisibleDateRange } from "./timeline";
 const origin = dateOnly("2024-02-26"),
   boundary = dateOnly("2024-03-01");
 const c: AxisCamera = {
@@ -79,4 +79,11 @@ describe("segmented calendar", () => {
     );
     expect(xBefore(dateOnly("2024-03-08"), fit) + 260).toBeCloseTo(976);
   });
+  it('keeps a usable calendar when fixed columns alone exceed the viewport',()=>{
+    const range={startDate:origin,endDateExclusive:dateOnly('2024-03-08')};
+    const fit=cameraForFitRange(c,range,200);
+    expect(fit.pxPerDay).toBe(1.5);
+    expect(daysBetween(getVisibleDateRange(200,fit).startDate,origin)).toBeLessThan(20);
+  });
+
 });
