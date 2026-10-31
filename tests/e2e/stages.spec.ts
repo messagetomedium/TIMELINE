@@ -21,8 +21,18 @@ async function undo(page: Page, redo = false) {
   await saved(page);
 }
 async function applyDate(page: Page, label: string, date: string) {
-  const field = page.getByLabel(label, { exact: true });
-  await field.fill(date);
+  const project =
+    label === "Начало проекта" || label === "Окончание проекта включительно";
+  const field = page.getByLabel(
+    project ? (label === "Начало проекта" ? "Начало" : "Конец") : label,
+    { exact: true },
+  );
+  await field.fill(project ? date.split("-").reverse().join(".") : date);
+  if (project) {
+    await field.press("Enter");
+    await saved(page);
+    return;
+  }
   await field
     .locator("..")
     .locator("..")
@@ -179,7 +189,9 @@ test("boundary input and drag use the same plan with full preview, no intermedia
   await drag(page, handle, (await scale(page)) * 2, false);
   expect(content(await current(page))).toEqual(content(d));
   await expect(page.locator(".stage-affected")).toHaveCount(2);
-  await expect(page.getByLabel("Начало этапа",{exact:true})).toHaveValue("2026-11-11");
+  await expect(page.getByLabel("Начало этапа", { exact: true })).toHaveValue(
+    "2026-11-11",
+  );
   await expect(entity(page, required(d.processes[2]).id)).toHaveAttribute(
     "data-start",
     "2026-11-11",
@@ -210,10 +222,9 @@ test("boundary slack exhausts minimally and anchor follows the new project end; 
     exact: true,
   });
   await drag(page, handle, (await scale(page)) * 5, false);
-  await expect(page.locator(".checkpoint-line")).toHaveAttribute(
-    "data-date",
-    "2026-11-17",
-  );
+  await expect(
+    page.locator(".timeline-canvas .checkpoint-line"),
+  ).toHaveAttribute("data-date", "2026-11-17");
   expect(await current(page)).toEqual(d);
   await page.keyboard.press("Escape");
   await page.mouse.up();

@@ -1,3 +1,7 @@
+import { PeopleCatalog } from "../features/timeline/PeopleUI";
+import { emptyCatalog } from "../domain/v2/peopleModel";
+import { WORKSPACE_ID } from "../domain/v2/model";
+import type { PeopleCommand } from "../domain/v2/people";
 import { FolderNavigation } from "../features/navigation/FolderNavigation";
 import { CommitText } from "../features/timeline/CommitText";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -32,6 +36,8 @@ function selectedId() {
   return raw ? projectIdSchema.safeParse(raw).data : null;
 }
 export function FoundationApp({ service }: { service: CommandService }) {
+  const [catalog, setCatalog] = useState(() => emptyCatalog(WORKSPACE_ID)),
+    [peopleOpen, setPeopleOpen] = useState(false);
   const [documents, setDocuments] = useState<Snapshot[] | null>(null),
     [preferences, setPreferences] = useState(defaultPreferences),
     [views, setViews] = useState<Record<string, ViewPreferences>>({});
@@ -48,6 +54,7 @@ export function FoundationApp({ service }: { service: CommandService }) {
   const refresh = useCallback(async () => {
     const s = await service.snapshot();
     setDocuments(s.documents);
+    setCatalog(s.catalog);
     setPreferences(s.preferences);
     setViews(s.views);
     setHistoryIssues(s.historyIssues);
@@ -93,6 +100,15 @@ export function FoundationApp({ service }: { service: CommandService }) {
     },
     [refresh],
   );
+  const peopleCommand = (command: PeopleCommand) =>
+    run(() =>
+      service.peopleExecute({
+        commandId: crypto.randomUUID(),
+        workspaceId: catalog.workspaceId,
+        expectedRevision: catalog.revision,
+        command,
+      }),
+    );
   const active = documents?.find((d) => d.project.id === id);
   const undo = useCallback(
     (redo = false) => {
@@ -112,7 +128,10 @@ export function FoundationApp({ service }: { service: CommandService }) {
           ))
       )
         return;
-      if (active) {
+      if (peopleOpen) {
+        e.preventDefault();
+        void run(() => service.peopleUndo(catalog.revision, e.shiftKey));
+      } else if (active) {
         e.preventDefault();
         undo(e.shiftKey);
       }
@@ -121,7 +140,7 @@ export function FoundationApp({ service }: { service: CommandService }) {
     return () => {
       window.removeEventListener("keydown", listener);
     };
-  }, [active, undo]);
+  }, [active, undo, peopleOpen, catalog.revision, run, service]);
   useEffect(() => {
     document.title = active
       ? `${active.project.name} — Таймлайн`
@@ -176,6 +195,15 @@ export function FoundationApp({ service }: { service: CommandService }) {
             location.hash = `/projects/${projectId}`;
           }}
         />
+        <button
+          className="navigation-button people-nav"
+          disabled={!documents}
+          onClick={() => {
+            setPeopleOpen(true);
+          }}
+        >
+          Исполнители
+        </button>
         <span
           className="workspace-label"
           role="status"
@@ -243,6 +271,8 @@ export function FoundationApp({ service }: { service: CommandService }) {
               <FoundationTimeline
                 key={id}
                 snapshot={active}
+                catalog={catalog}
+                onPeople={peopleCommand}
                 inspectorCollapsed={preferences.inspectorCollapsed ?? false}
                 onToggleInspector={() => {
                   savePreferences({
@@ -312,6 +342,18 @@ export function FoundationApp({ service }: { service: CommandService }) {
             />
           )}
         </div>
+      )}
+      {peopleOpen && (
+        <PeopleCatalog
+          catalog={catalog}
+          onCommand={peopleCommand}
+          onUndo={(redo) => {
+            void run(() => service.peopleUndo(catalog.revision, redo));
+          }}
+          onClose={() => {
+            setPeopleOpen(false);
+          }}
+        />
       )}
       {dialog && dialog !== "new" && (
         <section className="modal-backdrop">

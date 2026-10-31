@@ -1,3 +1,5 @@
+import { activeAssignment } from "./peopleModel";
+import type { CatalogData } from "./peopleModel";
 import { z } from "zod";
 import { dateOnlySchema } from "../schema";
 import { laneIdSchema, processIdSchema, taskIdSchema } from "../ids";
@@ -145,7 +147,12 @@ function expand(d: Snapshot, source: Snapshot, k: WorkKind, parentId: string) {
 export function copySourceIds(d: Snapshot, k: WorkKind, id: string) {
   if (k === "task") {
     if (!d.tasks.some((t) => t.id === id)) throw Error("Задача не найдена");
-    return [id];
+    return [
+      id,
+      ...d.assignments
+        .filter((a) => a.kind === "task" && a.targetId === id)
+        .map((a) => a.id),
+    ];
   }
   if (!d.processes.some((p) => p.id === id)) throw Error("Процесс не найден");
   return [
@@ -155,6 +162,13 @@ export function copySourceIds(d: Snapshot, k: WorkKind, id: string) {
       .map((l) => l.id),
     ...d.tasks.filter((t) => t.processId === id).map((t) => t.id),
     ...d.results.filter((r) => r.processId === id).map((r) => r.id),
+    ...d.assignments
+      .filter(
+        (a) =>
+          a.targetId === id ||
+          d.tasks.some((t) => t.processId === id && t.id === a.targetId),
+      )
+      .map((a) => a.id),
   ];
 }
 function assertFresh(d: Snapshot, ids: string[]) {
@@ -167,12 +181,18 @@ function assertFresh(d: Snapshot, ids: string[]) {
       d.lanes,
       d.results,
       d.checkpoints,
+      d.assignments,
     ].flatMap((xs) => xs.map((x) => x.id)),
   ]);
   if (new Set(ids).size !== ids.length || ids.some((id) => existing.has(id)))
     throw Error("Новые ID должны быть уникальными");
 }
-export function applyWork(source: Snapshot, d: Snapshot, c: WorkCommand) {
+export function applyWork(
+  source: Snapshot,
+  d: Snapshot,
+  c: WorkCommand,
+  people?: CatalogData,
+) {
   if (c.type === "GroupMove") {
     const selected = selectedWorks(d, c.kind, c.ids),
       first = selected[0];
@@ -353,6 +373,26 @@ export function applyWork(source: Snapshot, d: Snapshot, c: WorkCommand) {
       d.lanes.push(row);
       insertRows(d, c.kind, parentId, next?.id ?? null, [row]);
     }
+    const sourceTargets =
+      c.kind === "process"
+        ? [
+            c.id,
+            ...d.tasks.filter((t) => t.processId === c.id).map((t) => t.id),
+          ]
+        : [c.id];
+    d.assignments.push(
+      ...d.assignments
+        .filter(
+          (a) =>
+            sourceTargets.includes(a.targetId) && activeAssignment(a, people),
+        )
+        .map((a) => ({
+          ...a,
+          id: mapped(a.id),
+          targetId: mapped(a.targetId),
+          revision: 0,
+        })),
+    );
     if (c.kind === "process") {
       const p = d.processes.find((p) => p.id === c.id);
       if (!p) throw Error("Процесс не найден");

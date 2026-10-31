@@ -1,3 +1,5 @@
+import { personSchema, assignmentSchema } from "./peopleModel";
+export { personSchema } from "./peopleModel";
 import { z } from "zod";
 import {
   projectSchema,
@@ -61,20 +63,13 @@ export const resultSchema = z.strictObject({
   revision: z.number().int().nonnegative(),
 });
 export const resultPlacementSchema = z.strictObject({
-  ...scope, resultId: uuid, isPlaced: z.boolean(), hiddenByUser: z.boolean(),
-  layoutMode: z.enum(['auto','manual']), sortIndex: z.number().int().nonnegative(),
-  manualY: z.number().nonnegative(), revision: z.number().int().nonnegative(),
-});
-export const personSchema = z.strictObject({
-  id: uuid,
-  workspaceId: uuid,
-  firstName: z.string(),
-  lastName: z.string(),
-  defaultRole: z.string(),
-  contacts: z.string(),
-  note: z.string(),
-  archivedAt: z.iso.datetime().nullable(),
-  linkedUserId: uuid.nullable(),
+  ...scope,
+  resultId: uuid,
+  isPlaced: z.boolean(),
+  hiddenByUser: z.boolean(),
+  layoutMode: z.enum(["auto", "manual"]),
+  sortIndex: z.number().int().nonnegative(),
+  manualY: z.number().nonnegative(),
   revision: z.number().int().nonnegative(),
 });
 export interface PeopleCatalog {
@@ -100,14 +95,12 @@ const laneSchema = z.discriminatedUnion("kind", [
 export const snapshotSchema = z
   .strictObject({
     schemaVersion: z.literal(2),
-    project: projectSchema
-      .unwrap()
-      .extend({
-        workspaceId: uuid,
-        isScheduled: z.boolean(),
-        archivedAt: z.iso.datetime().nullable(),
-        visibility: z.literal("workspace"),
-      }),
+    project: projectSchema.unwrap().extend({
+      workspaceId: uuid,
+      isScheduled: z.boolean(),
+      archivedAt: z.iso.datetime().nullable(),
+      visibility: z.literal("workspace"),
+    }),
     stages: z.array(stageSchema).min(1),
     lanes: z.array(laneSchema),
     processes: z.array(
@@ -116,6 +109,7 @@ export const snapshotSchema = z
     tasks: z.array(taskSchema.unwrap().extend(scope)),
     checkpoints: z.array(checkpointSchema),
     results: z.array(resultSchema),
+    assignments: z.array(assignmentSchema).default([]),
     resultPlacements: z.array(resultPlacementSchema).default([]),
     viewPreferences: viewPreferencesSchema,
   })
@@ -131,6 +125,7 @@ export const snapshotSchema = z
       d.tasks,
       d.checkpoints,
       d.results,
+      d.assignments,
     ])
       for (const e of collection) {
         if (ids.has(e.id)) fail("Повторяющийся ID");
@@ -170,9 +165,7 @@ export const snapshotSchema = z
         l?.kind !== "process" ||
         l.stageId !== p.stageId
       )
-        fail(
-          "Процесс должен находиться в своём этапе и строке.",
-        );
+        fail("Процесс должен находиться в своём этапе и строке.");
     }
     for (const t of d.tasks) {
       const p = pm.get(t.processId),
@@ -184,6 +177,19 @@ export const snapshotSchema = z
         l.processId !== t.processId
       )
         fail("Задача должна находиться в своём процессе и строке");
+    }
+    const assignmentTargets = new Set<string>();
+    for (const a of d.assignments) {
+      const key = `${a.kind}:${a.targetId}`;
+      if (
+        assignmentTargets.has(key) ||
+        !(a.kind === "process" ? d.processes : d.tasks).some(
+          (w) => w.id === a.targetId,
+        ) ||
+        (!a.personId && !a.roleLabel.trim())
+      )
+        fail("Некорректное назначение исполнителя");
+      assignmentTargets.add(key);
     }
     const linked = new Set<string>();
     for (const r of d.results) {
@@ -198,9 +204,20 @@ export const snapshotSchema = z
     }
     const placements = new Set<string>();
     for (const p of d.resultPlacements) {
-      if (placements.has(p.resultId) || !d.results.some(r=>r.id===p.resultId) || p.projectId!==d.project.id || p.workspaceId!==d.project.workspaceId) fail('Некорректное размещение результата');
+      if (
+        placements.has(p.resultId) ||
+        !d.results.some((r) => r.id === p.resultId) ||
+        p.projectId !== d.project.id ||
+        p.workspaceId !== d.project.workspaceId
+      )
+        fail("Некорректное размещение результата");
       placements.add(p.resultId);
-      if (p.isPlaced && (p.hiddenByUser || !d.results.find(r=>r.id===p.resultId)?.title.trim())) fail('Пустой или скрытый результат нельзя разместить');
+      if (
+        p.isPlaced &&
+        (p.hiddenByUser ||
+          !d.results.find((r) => r.id === p.resultId)?.title.trim())
+      )
+        fail("Пустой или скрытый результат нельзя разместить");
     }
     for (const list of [d.processes, d.tasks]) {
       const byLane = new Map<string, (typeof list)[number][]>();
@@ -226,7 +243,8 @@ export const snapshotSchema = z
 export type Snapshot = z.infer<typeof snapshotSchema>;
 export type Result = z.infer<typeof resultSchema>;
 export type ResultPlacement = z.infer<typeof resultPlacementSchema>;
-export const entityId = (e: {id:string}|{resultId:string}) => "id" in e ? e.id : e.resultId;
+export const entityId = (e: { id: string } | { resultId: string }) =>
+  "id" in e ? e.id : e.resultId;
 export type Checkpoint = z.infer<typeof checkpointSchema>;
 export const checkpointDate = (d: Snapshot, c: Checkpoint) =>
   c.timing.anchor === "free"
@@ -298,8 +316,15 @@ export function displayDocument(d: Snapshot) {
 }
 
 /** Remove dangling expansions while retaining independent camera/view settings. */
-export function normalizeView(document:Snapshot,view:Snapshot['viewPreferences']){
- if(view.projectId!==document.project.id)throw Error('Вид принадлежит другому проекту');
- const ids=new Set(document.processes.map(p=>p.id));
- return viewPreferencesSchema.parse({...view,expandedProcessIds:view.expandedProcessIds.filter(id=>ids.has(id))});
+export function normalizeView(
+  document: Snapshot,
+  view: Snapshot["viewPreferences"],
+) {
+  if (view.projectId !== document.project.id)
+    throw Error("Вид принадлежит другому проекту");
+  const ids = new Set(document.processes.map((p) => p.id));
+  return viewPreferencesSchema.parse({
+    ...view,
+    expandedProcessIds: view.expandedProcessIds.filter((id) => ids.has(id)),
+  });
 }

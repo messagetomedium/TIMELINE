@@ -1,10 +1,19 @@
+import { checkpointScene } from "../../domain/v2/checkpointLayout";
+import { AssignmentControl } from "./PeopleUI";
+import type { SendPeople } from "./PeopleUI";
+import { PeopleTimeline } from "./PeopleTimeline";
+import type { CatalogState } from "../../domain/v2/peopleModel";
+import { statusSchema } from "../../domain/schema";
+import { CheckpointHeaders, CheckpointLines } from "./CheckpointLayer";
+import { CalendarShading } from "./CalendarShading";
+import { DateRangeEditor } from "./DateRangeEditor";
 import { WorkActions, CreateWorkForm } from "./WorkActions";
 import type { WorkKind } from "../../domain/v2/work";
 import { useRef, useState } from "react";
 import { addDays, dateOnlySchema } from "../../domain";
 import { displayDocument, checkpointDate } from "../../domain/v2/model";
 import type { Snapshot } from "../../domain/v2/model";
-import { RESULT_COLUMN_WIDTH, xBefore } from "../../domain/SegmentAxis";
+import { RESULT_COLUMN_WIDTH } from "../../domain/SegmentAxis";
 import { resultLayout } from "../../domain/v2/results";
 import { ResultFields, ResultColumns } from "./ResultUI";
 import { CommitText } from "./CommitText";
@@ -12,11 +21,7 @@ import { planCommand } from "../../domain/v2/commands";
 import type { Selection } from "../../application/timelineCommands";
 import type { ViewPreferences, ProjectId, StageMarkerId } from "../../domain";
 import { stageMarkerIdSchema } from "../../domain";
-import {
-  InsertStageDialog,
-  StageActions,
-  DateCommandField,
-} from "./StageControls";
+import { InsertStageDialog, StageActions } from "./StageControls";
 import type { StageBoundary, SendCommand } from "./StageControls";
 import { TimelineWorkspace } from "./TimelineWorkspace";
 import { layoutTimeline } from "../../application/timelineLayout";
@@ -40,6 +45,8 @@ function processPositions(
 }
 export function FoundationTimeline({
   snapshot,
+  catalog,
+  onPeople,
   onCommand,
   onUndo,
   onRedo,
@@ -52,6 +59,8 @@ export function FoundationTimeline({
   inspectorCollapsed: boolean;
   onToggleInspector: () => void;
   snapshot: Snapshot;
+  catalog: CatalogState;
+  onPeople: SendPeople;
   onCommand: SendCommand;
   onUndo: () => void;
   onRedo: () => void;
@@ -94,6 +103,37 @@ export function FoundationTimeline({
         onCreateWork={() => Promise.resolve(null)}
         foundation={{
           snapshot,
+          people: (props, scene) => (
+            <PeopleTimeline
+              {...props}
+              snapshot={scene ?? snapshot}
+              catalog={catalog}
+            />
+          ),
+          range: () => ({
+            startDate: snapshot.checkpoints.reduce(
+              (v, c) =>
+                checkpointDate(snapshot, c) < v
+                  ? checkpointDate(snapshot, c)
+                  : v,
+              snapshot.project.startDate,
+            ),
+            endDateExclusive: snapshot.checkpoints.reduce(
+              (v, c) =>
+                addDays(checkpointDate(snapshot, c), 1) > v
+                  ? addDays(checkpointDate(snapshot, c), 1)
+                  : v,
+              snapshot.project.endDateExclusive,
+            ),
+          }),
+          area: (scene) => ({
+            project: (scene ?? snapshot).project,
+            checkpoints: (scene ?? snapshot).checkpoints.map((c) =>
+              checkpointDate(scene ?? snapshot, c),
+            ),
+          }),
+          stageHeight: (camera, width, scene) =>
+            68 + checkpointScene(scene ?? snapshot, camera, width).height,
           onCreate: create,
           inspectorCollapsed,
           onToggleInspector,
@@ -204,16 +244,41 @@ export function FoundationTimeline({
           onSelect: () => {
             setSpecial(null);
           },
-          stages: (camera, width, preview, start) => {
+          stages: (camera, width, preview, start, checkpointStart) => {
             const scene = preview ?? snapshot,
               stages = [...scene.stages].sort(
                 (a, b) => a.sortIndex - b.sortIndex,
               );
             return (
               <div
+                style={
+                  {
+                    height: "100%",
+                    "--checkpoint-header-height": `${String(checkpointScene(scene, camera, width).height)}px`,
+                  } as import("react").CSSProperties
+                }
                 className="stage-band foundation-stage-band"
                 aria-label="Этапы производства"
               >
+                <CalendarShading
+                  area={{
+                    project: scene.project,
+                    checkpoints: scene.checkpoints.map((c) =>
+                      checkpointDate(scene, c),
+                    ),
+                  }}
+                  camera={camera}
+                  height="100%"
+                />
+                <CheckpointHeaders
+                  snapshot={scene}
+                  camera={camera}
+                  width={width}
+                  onSelect={(id) => {
+                    setSpecial({ kind: "checkpoint", id });
+                  }}
+                  onStart={checkpointStart}
+                />
                 {stages.map((s, i) => {
                   const left = xForDate(s.startDate, camera);
                   const affected =
@@ -291,41 +356,15 @@ export function FoundationTimeline({
               </div>
             );
           },
-          checkpoints: (camera, preview, start) => {
-            const scene = preview ?? snapshot;
-            return scene.checkpoints.map((c) => (
-              <button
-                data-interactive
-                key={c.id}
-                className="checkpoint-line"
-                data-checkpoint-id={c.id}
-                data-date={checkpointDate(scene, c)}
-                style={{
-                  left: xBefore(addDays(checkpointDate(scene, c), 1), camera),
-                }}
-                aria-label={`Чекпойнт: ${c.title}`}
-                title={
-                  c.timing.anchor === "project_end"
-                    ? "Привязан к окончанию проекта. Для ручного переноса снимите привязку в свойствах."
-                    : "Перетащите для изменения даты. Esc — отмена."
-                }
-                onPointerDown={(e) => {
-                  if (c.timing.anchor === "free") {
-                    start(e, c.id, checkpointDate(scene, c));
-                    setSpecial({ kind: "checkpoint", id: c.id });
-                  }
-                }}
-                onClick={() => {
-                  setSpecial({ kind: "checkpoint", id: c.id });
-                }}
-              >
-                <span>
-                  ● {c.title}
-                  <small>{checkpointDate(scene, c)}</small>
-                </span>
-              </button>
-            ));
-          },
+          checkpoints: (camera, preview) => (
+            <CheckpointLines
+              snapshot={preview ?? snapshot}
+              camera={camera}
+              onSelect={(id) => {
+                setSpecial({ kind: "checkpoint", id });
+              }}
+            />
+          ),
           toolbar: (
             <>
               <button
@@ -350,6 +389,21 @@ export function FoundationTimeline({
               >
                 Проект
               </button>
+              <button
+                className="navigation-button"
+                onClick={() => {
+                  const id = crypto.randomUUID();
+                  void onCommand({
+                    type: "CreateCheckpoint",
+                    id,
+                    title: "Чекпойнт",
+                  }).then((ok) => {
+                    if (ok) setSpecial({ kind: "checkpoint", id });
+                  });
+                }}
+              >
+                + Чекпойнт
+              </button>
               <span className="toolbar-separator" />
             </>
           ),
@@ -357,6 +411,8 @@ export function FoundationTimeline({
             <FoundationInspector
               key={currentSpecial?.id ?? selection?.id ?? "none"}
               snapshot={preview ?? snapshot}
+              catalog={catalog}
+              onPeople={onPeople}
               target={currentSpecial ?? selection}
               onCommand={onCommand}
               count={count}
@@ -395,6 +451,8 @@ export function FoundationTimeline({
 }
 function FoundationInspector({
   snapshot,
+  catalog,
+  onPeople,
   target,
   onCommand,
   onResultSelect,
@@ -402,6 +460,8 @@ function FoundationInspector({
   count,
 }: {
   snapshot: Snapshot;
+  catalog: CatalogState;
+  onPeople: SendPeople;
   target: Special | Selection | null;
   onCommand: SendCommand;
   onResultSelect: (id: string) => void;
@@ -519,6 +579,111 @@ function FoundationInspector({
           onCreate={onCreate}
         />
       )}
+      {(target.kind === "process" || target.kind === "task") &&
+        item &&
+        "status" in item && (
+          <>
+            <label className="inspector-label">
+              Статус
+              <select
+                aria-label="Статус"
+                value={item.status}
+                onChange={(e) => {
+                  void onCommand({
+                    type: "SetWorkStatus",
+                    kind: target.kind,
+                    id: target.id,
+                    status: statusSchema.parse(e.target.value),
+                  });
+                }}
+              >
+                {statusSchema.options.map((status) => (
+                  <option key={status}>{status}</option>
+                ))}
+              </select>
+            </label>
+            <DateRangeEditor
+              key={`work-range:${item.startDate}:${item.endDateExclusive}`}
+              start={item.startDate}
+              endExclusive={item.endDateExclusive}
+              heading="Сроки работы"
+              startLabel="Начало работы"
+              endLabel="Конец работы"
+              apply={(startDate, endDateExclusive) =>
+                onCommand({
+                  type: "ResizeWorkRange",
+                  kind: target.kind,
+                  id: target.id,
+                  startDate,
+                  endDateExclusive,
+                })
+              }
+              validate={(startDate, endDateExclusive) => {
+                try {
+                  planCommand(snapshot, {
+                    type: "ResizeWorkRange",
+                    kind: target.kind,
+                    id: target.id,
+                    startDate,
+                    endDateExclusive,
+                  });
+                  return null;
+                } catch (e) {
+                  return e instanceof Error ? e.message : "Проверьте сроки";
+                }
+              }}
+            />
+            {target.kind === "process" && "color" in item && (
+              <label className="inspector-label color-field">
+                Цвет процесса
+                <input
+                  aria-label="Цвет процесса"
+                  type="color"
+                  value={item.color}
+                  onChange={(e) => {
+                    void onCommand({
+                      type: "SetProcessColor",
+                      id: target.id,
+                      color: e.target.value,
+                    });
+                  }}
+                />
+              </label>
+            )}
+            <AssignmentControl
+              key={`${target.id}:${snapshot.assignments.find((a) => a.targetId === target.id)?.id ?? "none"}`}
+              snapshot={snapshot}
+              catalog={catalog}
+              target={{ kind: target.kind, targetId: target.id }}
+              onCommand={onCommand}
+              onPeople={onPeople}
+            />
+          </>
+        )}
+      {checkpoint && (
+        <div className="stage-actions">
+          <button
+            className="quiet-button"
+            onClick={() => {
+              void onCommand({
+                type: "DuplicateCheckpoint",
+                id: checkpoint.id,
+                newId: crypto.randomUUID(),
+              });
+            }}
+          >
+            Дублировать чекпойнт
+          </button>
+          <button
+            className="danger-button"
+            onClick={() => {
+              void onCommand({ type: "DeleteCheckpoint", id: checkpoint.id });
+            }}
+          >
+            Удалить чекпойнт
+          </button>
+        </div>
+      )}
       {checkpoint && (
         <CheckpointTiming
           key={JSON.stringify(checkpoint.timing)}
@@ -527,7 +692,7 @@ function FoundationInspector({
           onCommand={onCommand}
         />
       )}
-      {item && "startDate" in item && (
+      {target.kind === "stage" && item && "startDate" in item && (
         <div className="inspector-section">
           <span className="inspector-label">Даты</span>
           <p>
@@ -604,34 +769,47 @@ function FoundationInspector({
         </>
       )}
       {target.kind === "project" && (
-        <section className="stage-actions">
-          <h3>Границы проекта</h3>
-          <DateCommandField
-            key={`start:${snapshot.project.startDate}`}
-            label="Начало проекта"
-            value={snapshot.project.startDate}
-            apply={(date) =>
-              onCommand({ type: "ResizeProject", edge: "start", date })
-            }
+        <label className="checkbox-label">
+          <input
+            type="checkbox"
+            checked={snapshot.project.isScheduled}
+            onChange={(e) => {
+              void onCommand({
+                type: "SetProjectScheduled",
+                value: e.target.checked,
+              });
+            }}
           />
-          <DateCommandField
-            key={`end:${snapshot.project.endDateExclusive}`}
-            label="Окончание проекта включительно"
-            value={addDays(snapshot.project.endDateExclusive, -1)}
-            apply={(date) =>
-              onCommand({
-                type: "ResizeProject",
-                edge: "end",
-                date: addDays(date, 1),
-              })
-            }
-          />
-          <p className="inspector-note">
-            Изменение границ не переносит работы. Перенос целого проекта — за
-            ручку в портфеле.
-          </p>
-        </section>
+          Показывать даты в портфеле
+        </label>
       )}
+      {target.kind === "project" && (
+        <DateRangeEditor
+          key={`project-range:${snapshot.project.startDate}:${snapshot.project.endDateExclusive}`}
+          start={snapshot.project.startDate}
+          endExclusive={snapshot.project.endDateExclusive}
+          apply={(startDate, endDateExclusive) =>
+            onCommand({
+              type: "ResizeProjectRange",
+              startDate,
+              endDateExclusive,
+            })
+          }
+          validate={(startDate, endDateExclusive) => {
+            try {
+              planCommand(snapshot, {
+                type: "ResizeProjectRange",
+                startDate,
+                endDateExclusive,
+              });
+              return null;
+            } catch (e) {
+              return e instanceof Error ? e.message : "Проверьте границы";
+            }
+          }}
+        />
+      )}
+
       <p className="inspector-note">
         Работы толкают соседей в своей строке. Один жест — одна отмена.
       </p>

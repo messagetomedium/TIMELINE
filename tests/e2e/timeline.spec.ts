@@ -84,27 +84,27 @@ test("checkpoint title, free date, anchor, note and undo/redo persist correctly"
   await page.getByLabel("Заметка", { exact: true }).fill("Проверить");
   await page.getByRole("button", { name: "Сохранить чекпойнт" }).click();
   await saved(page);
-  await expect(page.locator(".checkpoint-line")).toHaveAttribute(
+  await expect(page.locator(".timeline-canvas .checkpoint-line")).toHaveAttribute(
     "data-date",
     "2026-11-20",
   );
   await page.getByLabel("Привязать к дате окончания проекта").check();
   await page.getByRole("button", { name: "Сохранить чекпойнт" }).click();
   await saved(page);
-  await expect(page.locator(".checkpoint-line")).toHaveAttribute(
+  await expect(page.locator(".timeline-canvas .checkpoint-line")).toHaveAttribute(
     "data-date",
     "2026-11-15",
   );
   await page.getByRole("button", { name: "Отменить", exact: true }).click();
   await saved(page);
-  await expect(page.locator(".checkpoint-line")).toHaveAttribute(
+  await expect(page.locator(".timeline-canvas .checkpoint-line")).toHaveAttribute(
     "data-date",
     "2026-11-20",
   );
   await page.getByRole("button", { name: "Повторить", exact: true }).click();
   await saved(page);
   await page.reload();
-  await expect(page.locator(".checkpoint-line")).toHaveAttribute(
+  await expect(page.locator(".timeline-canvas .checkpoint-line")).toHaveAttribute(
     "data-date",
     "2026-11-15",
   );

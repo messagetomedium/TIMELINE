@@ -187,12 +187,17 @@ function ripple(
     cursor = neighbor;
   }
 }
-export function expandTaskParent(d:Snapshot,source:Snapshot,id:string) {
- const p=required(d.processes.find(p=>p.id===id)),before={...p};
- for(const child of d.tasks.filter(t=>t.processId===id)){p.startDate=earlier(p.startDate,child.startDate);p.endDateExclusive=later(p.endDateExclusive,child.endDateExclusive);}
- if(p.startDate<before.startDate)ripple(d,source,'process',p.id,-1);
- if(p.endDateExclusive>before.endDateExclusive)ripple(d,source,'process',p.id,1);
- expandStage(d,p.stageId);
+export function expandTaskParent(d: Snapshot, source: Snapshot, id: string) {
+  const p = required(d.processes.find((p) => p.id === id)),
+    before = { ...p };
+  for (const child of d.tasks.filter((t) => t.processId === id)) {
+    p.startDate = earlier(p.startDate, child.startDate);
+    p.endDateExclusive = later(p.endDateExclusive, child.endDateExclusive);
+  }
+  if (p.startDate < before.startDate) ripple(d, source, "process", p.id, -1);
+  if (p.endDateExclusive > before.endDateExclusive)
+    ripple(d, source, "process", p.id, 1);
+  expandStage(d, p.stageId);
 }
 export function applyTimelinePlan(
   source: Snapshot,
@@ -254,6 +259,39 @@ export function applyTimelinePlan(
     expandStage(d, p.stageId);
   }
 }
+export function resizeWorkRange(
+  source: Snapshot,
+  d: Snapshot,
+  kind: "process" | "task",
+  id: string,
+  startDate: DateOnly,
+  endDateExclusive: DateOnly,
+) {
+  const item = required(
+      (kind === "process" ? d.processes : d.tasks).find((w) => w.id === id),
+    ),
+    before = { ...item };
+  if (startDate >= endDateExclusive)
+    throw Error("Конец работы должен быть не раньше начала");
+  Object.assign(item, { startDate, endDateExclusive });
+  if (kind === "process") {
+    if (d.tasks.some((t) => t.processId === id && !containsInterval(item, t)))
+      throw Error("Границы процесса обрезают существующие задачи");
+    if (startDate < before.startDate) ripple(d, source, "process", id, -1);
+    if (endDateExclusive > before.endDateExclusive)
+      ripple(d, source, "process", id, 1);
+    expandStage(d, required(d.processes.find((p) => p.id === id)).stageId);
+  } else {
+    if (startDate < before.startDate) ripple(d, source, "task", id, -1);
+    if (endDateExclusive > before.endDateExclusive)
+      ripple(d, source, "task", id, 1);
+    expandTaskParent(
+      d,
+      source,
+      required(d.tasks.find((t) => t.id === id)).processId,
+    );
+  }
+}
 function removeContents(d: Snapshot, id: string) {
   const ids = new Set(
     d.processes.filter((p) => p.stageId === id).map((p) => p.id),
@@ -264,7 +302,9 @@ function removeContents(d: Snapshot, id: string) {
     l.kind === "process" ? l.stageId !== id : !ids.has(l.processId),
   );
   d.results = d.results.filter((r) => r.stageId !== id);
-  d.resultPlacements = d.resultPlacements.filter(p=>d.results.some(r=>r.id===p.resultId));
+  d.resultPlacements = d.resultPlacements.filter((p) =>
+    d.results.some((r) => r.id === p.resultId),
+  );
 }
 export function applyStagePlan(d: Snapshot, c: StageCommand) {
   const stages = sortedStages(d);

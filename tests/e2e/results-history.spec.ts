@@ -338,11 +338,11 @@ test("Enter saves dates once; unchanged repeated saves preserve revisions and Re
   page,
 }) => {
   await page.getByRole("button", { name: "Проект", exact: true }).click();
-  const field = page.getByLabel("Окончание проекта включительно", {
+  const field = page.getByLabel("Конец", {
     exact: true,
   });
   const before = await current(page);
-  await field.fill("2026-11-18");
+  await field.fill("18.11.2026");
   await field.press("Enter");
   await field.press("Enter");
   await saved(page);
