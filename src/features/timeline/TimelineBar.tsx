@@ -17,7 +17,7 @@ interface Props {
   readonly highlighted: boolean;
   readonly expanded: boolean;
   readonly toggle: (() => void) | undefined;
-  readonly onSelect: (target: Selection) => void;
+  readonly onSelect: (target: Selection, modifiers?: {ctrlKey:boolean;metaKey:boolean;shiftKey:boolean}) => void;
   readonly onRename: (target: Selection, title: string) => void;
   readonly onHover: (id: string | null) => void;
   readonly onGesture: (event: PointerEvent, target: Selection, action: 'move' | 'start' | 'end') => void;
@@ -32,9 +32,9 @@ export function TimelineBar({ item, target, camera, viewportWidth, y, color, sel
   return (
     <div className={`timeline-bar ${target.kind}-bar ${selected ? 'selected' : ''} ${highlighted ? 'highlighted' : ''}`} style={style}
       role="button" tabIndex={0} aria-label={`${target.kind === 'process' ? 'Процесс' : 'Задача'}: ${item.title}`} data-interactive
-      data-entity-id={item.id} data-start={item.startDate} data-end={item.endDateExclusive}
-      title={item.title} onClick={(event) => { event.stopPropagation(); onSelect(target); }}
-      onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onSelect(target); } }}
+      data-entity-id={item.id} data-selected={selected} data-start={item.startDate} data-end={item.endDateExclusive}
+      title={item.title} onClick={(event) => { event.stopPropagation(); onSelect(target,event); }}
+      onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onSelect(target,event); } }}
       onMouseEnter={() => { onHover(item.id); }} onMouseLeave={() => { onHover(null); }}>
       <button className="resize-handle start" aria-label={`Изменить начало: ${item.title}`} onPointerDown={(event) => { onGesture(event, target, 'start'); }} />
       <button className="move-handle" style={{ left: visibleInset + 7 }} aria-label={`Переместить: ${item.title}`} onPointerDown={(event) => { onGesture(event, target, 'move'); }}>⠿</button>

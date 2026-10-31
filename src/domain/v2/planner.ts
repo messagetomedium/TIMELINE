@@ -120,7 +120,7 @@ function growLeft(d: Snapshot, index: number, start: DateOnly) {
   }
   d.project.startDate = required(stages[0]).startDate;
 }
-function expandStage(d: Snapshot, id: string) {
+export function expandStage(d: Snapshot, id: string) {
   const stages = sortedStages(d),
     index = stages.findIndex((s) => s.id === id),
     s = required(stages[index]);
@@ -186,6 +186,13 @@ function ripple(
     else Object.assign(neighbor, shiftInterval(neighbor, delta));
     cursor = neighbor;
   }
+}
+export function expandTaskParent(d:Snapshot,source:Snapshot,id:string) {
+ const p=required(d.processes.find(p=>p.id===id)),before={...p};
+ for(const child of d.tasks.filter(t=>t.processId===id)){p.startDate=earlier(p.startDate,child.startDate);p.endDateExclusive=later(p.endDateExclusive,child.endDateExclusive);}
+ if(p.startDate<before.startDate)ripple(d,source,'process',p.id,-1);
+ if(p.endDateExclusive>before.endDateExclusive)ripple(d,source,'process',p.id,1);
+ expandStage(d,p.stageId);
 }
 export function applyTimelinePlan(
   source: Snapshot,

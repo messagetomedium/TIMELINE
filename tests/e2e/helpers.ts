@@ -8,7 +8,7 @@ export async function saved(page: Page) {
   ).toHaveText("Локально в этом браузере");
 }
 export async function home(page: Page) {
-  await page.getByRole("button", { name: "Проекты", exact: true }).click();
+  await page.getByRole("button", { name: "Домой", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "Проекты", exact: true }),
   ).toBeVisible();

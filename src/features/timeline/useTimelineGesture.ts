@@ -1,3 +1,5 @@
+import type { StackDrop } from "./groupDrop";
+import type { GroupMove } from "../../domain/v2/work";
 import type { GestureCommand } from "../../domain/v2/gesture";
 import { positionAtX, anchorPosition } from "../../domain/SegmentAxis";
 import type { DateOnly } from "../../domain";
@@ -23,6 +25,8 @@ type Operation =
       readonly kind: "bar";
       readonly target: Selection;
       readonly action: "move" | "start" | "end";
+      readonly ids: readonly string[];
+      readonly rows: readonly { sourceLaneId: string; laneId: string }[];
     }
   | { readonly kind: "stage"; readonly id: StageMarkerId }
   | {
@@ -40,6 +44,7 @@ interface Gesture {
   readonly operation: Operation | null;
   last: PreviewResult | null;
   command: GestureCommand | null;
+  direction: "horizontal" | "vertical" | null;
 }
 interface Props {
   readonly document: ProjectDocument;
@@ -56,6 +61,9 @@ interface Props {
     | ((command: GestureCommand, expectedRevision: number) => void)
     | undefined;
   readonly onError: (message: string) => void;
+  readonly stack?:
+    | ((document: ProjectDocument, drop: StackDrop) => GroupMove)
+    | undefined;
   readonly onStageClick: (id: StageMarkerId) => void;
 }
 
@@ -70,10 +78,11 @@ export function useTimelineGesture({
   onError,
   onStageClick,
   evaluate = (d, c) =>
-    c.type === "checkpoint"
+    c.type === "checkpoint" || c.type === "GroupMove"
       ? { ok: false, error: "Чекпойнты доступны в редакторе V2" }
       : applyTimelineCommand(d, c),
   onCommand,
+  stack,
 }: Props) {
   const gesture = useRef<Gesture | null>(null);
   const [preview, setPreview] = useState<ProjectDocument | null>(null);
@@ -128,6 +137,7 @@ export function useTimelineGesture({
       operation,
       last: null,
       command: null,
+      direction: null,
     };
     surface.current?.setPointerCapture(event.pointerId);
     setActive(operation ? "edit" : "pan");
@@ -152,7 +162,10 @@ export function useTimelineGesture({
           current.scrollTop - (event.clientY - current.y);
       return;
     }
-    if (Math.abs(dx) < 3 && !current.last) return;
+    const dy = event.clientY - current.y;
+    if (Math.hypot(dx, dy) < 6 && !current.last) return;
+    current.direction ??=
+      Math.abs(dy) > Math.abs(dx) ? "vertical" : "horizontal";
     const left =
       surface.current?.querySelector(".calendar-time")?.getBoundingClientRect()
         .left ?? 0;
@@ -167,56 +180,99 @@ export function useTimelineGesture({
       onError(current.last.error);
       return;
     }
-    const days = Math.round(
-      hit.datePosition - anchorPosition(current.x - left, current.camera),
-    );
-    const operation = current.operation;
     let command: GestureCommand;
-    if (operation.kind === "checkpoint") {
-      command = {
-        type: "checkpoint",
-        id: operation.id,
-        date: snapDate(addDays(operation.date, days), step),
-      };
-    } else if (operation.kind === "stage") {
-      const stage = current.document.stageMarkers.find(
-        (item) => item.id === operation.id,
+    try {
+      const days = Math.round(
+        hit.datePosition - anchorPosition(current.x - left, current.camera),
       );
-      if (!stage) return;
-      command = {
-        type: "stage",
-        id: stage.id,
-        date: snapDate(addDays(stage.date, days), step),
-      };
-    } else {
-      const item =
-        operation.target.kind === "process"
-          ? current.document.processes.find(
-              (item) => item.id === operation.target.id,
-            )
-          : current.document.tasks.find(
-              (item) => item.id === operation.target.id,
-            );
-      if (!item) return;
-      if (operation.action === "move") {
+      const operation = current.operation;
+      if (operation.kind === "checkpoint") {
         command = {
-          type: "move",
-          target: operation.target,
-          days: daysBetween(
-            item.startDate,
-            snapDate(addDays(item.startDate, days), step),
-          ),
+          type: "checkpoint",
+          id: operation.id,
+          date: snapDate(addDays(operation.date, days), step),
+        };
+      } else if (operation.kind === "stage") {
+        const stage = current.document.stageMarkers.find(
+          (item) => item.id === operation.id,
+        );
+        if (!stage) return;
+        command = {
+          type: "stage",
+          id: stage.id,
+          date: snapDate(addDays(stage.date, days), step),
         };
       } else {
-        const edge =
-          operation.action === "start" ? item.startDate : item.endDateExclusive;
-        command = {
-          type: "resize",
-          target: operation.target,
-          edge: operation.action,
-          date: snapDate(addDays(edge, days), step),
-        };
+        const item =
+          operation.target.kind === "process"
+            ? current.document.processes.find(
+                (item) => item.id === operation.target.id,
+              )
+            : current.document.tasks.find(
+                (item) => item.id === operation.target.id,
+              );
+        if (!item) return;
+        if (operation.action === "move") {
+          const delta =
+            stack && current.direction === "vertical" && Math.abs(dx) < 6
+              ? 0
+              : daysBetween(
+                  item.startDate,
+                  snapDate(addDays(item.startDate, days), step),
+                );
+          command = stack
+            ? current.direction === "vertical"
+              ? stack(current.document, {
+                  kind: operation.target.kind,
+                  ids: operation.ids,
+                  days: delta,
+                  date: addDays(
+                    current.camera.originDate,
+                    Math.floor(hit.datePosition + 1e-9),
+                  ),
+                  y:
+                    event.clientY -
+                    (body.current?.getBoundingClientRect().top ?? 0) +
+                    (body.current?.scrollTop ?? 0),
+                  rows: operation.rows,
+                })
+              : {
+                  type: "GroupMove",
+                  kind: operation.target.kind,
+                  ids: [...operation.ids],
+                  days: delta,
+                }
+            : {
+                type: "move",
+                target: operation.target,
+                days: daysBetween(
+                  item.startDate,
+                  snapDate(addDays(item.startDate, days), step),
+                ),
+              };
+        } else {
+          const edge =
+            operation.action === "start"
+              ? item.startDate
+              : item.endDateExclusive;
+          command = {
+            type: "resize",
+            target: operation.target,
+            edge: operation.action,
+            date: snapDate(addDays(edge, days), step),
+          };
+        }
       }
+    } catch (e) {
+      current.last = {
+        ok: false,
+        error: e instanceof Error ? e.message : "Перенос недоступен",
+      };
+      setPreview(null);
+      setDetails(null);
+      setInvalid(true);
+      onError(current.last.error);
+      return;
     }
     current.command = command;
     current.last = evaluate(current.document, command);
@@ -269,6 +325,7 @@ export function useTimelineGesture({
     snapshot: details?.snapshot,
     affectedIds: details?.affectedIds ?? [],
     active,
+    command: gesture.current?.command ?? null,
     invalid,
     onPointerMove,
     onPointerUp: finish,
@@ -278,8 +335,16 @@ export function useTimelineGesture({
       event: PointerEvent,
       target: Selection,
       action: "move" | "start" | "end",
+      ids: readonly string[] = [target.id],
     ) => {
-      begin(event, { kind: "bar", target, action });
+      const items =
+        target.kind === "process" ? document.processes : document.tasks;
+      const rows = [
+        ...new Set(
+          items.filter((x) => ids.includes(x.id)).map((x) => x.laneId),
+        ),
+      ].map((sourceLaneId) => ({ sourceLaneId, laneId: crypto.randomUUID() }));
+      begin(event, { kind: "bar", target, action, ids, rows });
     },
     startStage: (event: PointerEvent, id: StageMarkerId) => {
       begin(event, { kind: "stage", id });

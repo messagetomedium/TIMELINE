@@ -59,3 +59,20 @@ h3 { font-size: 16px; font-weight: 600; }
   .task-list { padding-left: 0; }
   .task-list li { flex-wrap: wrap; gap: 4px 12px; }
 }
+
+/* The folder row belongs to the application shell, outside the scrollable workspace. */
+.app-shell { background: #edf0f4; }
+.app-header { height: 58px; padding: 0 12px; gap: 12px; border: 0; background: transparent; }
+.folder-navigation { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; height: 100%; }
+.home-button { width: 36px; height: 36px; border: 1px solid #d7dde4; border-radius: 50%; flex: 0 0 36px; display: grid; place-items: center; background: #f9fafc; color: #7b8490; }
+.home-button:hover, .home-button.active { background: #fff; color: #466650; border-color: #8da592; }
+.home-button.active { box-shadow: 0 0 0 2px #dce7dd; }
+.folder-tabs { position: relative; display: flex; gap: 3px; align-items: flex-end; min-width: 0; flex: 1; height: 100%; overflow-x: auto; scrollbar-width: thin; scroll-padding-inline: 0; padding-top: 9px; }
+.folder-tab { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; height: 43px; min-width: 100px; max-width: 250px; padding: 0 22px; border: 1px solid #d7dce4; border-bottom: 0; border-radius: 13px 13px 0 0; background: #e3e7ee; color: #7b8493; font-size: 12px; }
+.folder-tab > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.folder-tab small { font-size: 9px; color: #8a909b; }
+.folder-tab.active { position: relative; z-index: 1; height: 49px; background: #fff; color: #3b4859; border-color: #d3dae3; font-weight: 600; }
+.app-content { margin: 0 12px 12px; border: 1px solid #d3dae3; border-radius: 12px; background: white; overflow: hidden; }
+.app-header .workspace-label { flex-shrink: 0; margin-left: 0; font-size: 10px; padding: 0; border: 0; background: transparent; }
+@media (prefers-reduced-motion: reduce) { .timeline-workspace { transition: none !important; } }
+@media (max-width:700px) { .app-header { padding-inline: 8px; gap: 6px; } .folder-navigation { gap: 8px; } .folder-tab { max-width: 180px; padding-inline: 14px; } .app-content { margin-inline: 8px; } }

@@ -1,3 +1,4 @@
+import { workCommandSchemas, applyWork } from './work';
 import { z } from "zod";
 import { snapshotSchema, checkpointSchema, checkpointDate, entityId } from "./model";
 import type { Snapshot } from "./model";
@@ -40,6 +41,7 @@ import { resultCommands, applyResult } from './results';
 const textTarget = z.enum(["project", "stage", "process", "task", "checkpoint"]);
 export const commandSchema = z.discriminatedUnion("type", [
   ...stageCommandSchemas,
+  ...workCommandSchemas,
   ...resultCommands,
   z.strictObject({type:z.literal("SetCheckpointTiming"),id:z.uuid(),timing:checkpointSchema.shape.timing}),
   z.strictObject({
@@ -201,6 +203,8 @@ export function applyCommand(
     );
   } else if(c.type === "UpdateResult" || c.type === "CreateStandaloneResult" || c.type === "SetResultPlaced" || c.type === "MoveResult" || c.type === "DeleteResult") {
     applyResult(d,c);
+  } else if(c.type === "GroupMove" || c.type === "CreateWork" || c.type === "DuplicateWork" || c.type === "DeleteWork") {
+    applyWork(source,d,c);
   } else {
     applyStagePlan(d, c);
   }

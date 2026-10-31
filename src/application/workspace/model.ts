@@ -9,7 +9,7 @@ export const portfolioSchema = z.strictObject({
   step: gridStepSchema, showWeekends: z.boolean(),
 });
 export const workspacePreferencesSchema = z.strictObject({
-  version: z.literal(1), mode: z.enum(['cards', 'timeline']), portfolio: portfolioSchema,
+  version: z.literal(1), inspectorCollapsed: z.boolean().optional(), mode: z.enum(['cards', 'timeline']), portfolio: portfolioSchema,
 });
 export type WorkspacePreferences = z.infer<typeof workspacePreferencesSchema>;
 export type PortfolioPreferences = WorkspacePreferences['portfolio'];
