@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   addDays,
   dateOnlySchema,
@@ -114,6 +114,7 @@ export function DateCommandField({
   value: string;
   apply: (value: ReturnType<typeof dateOnlySchema.parse>) => Promise<boolean>;
 }) {
+  const submitted = useRef(value);
   const [draft, setDraft] = useState(value),
     [error, setError] = useState("");
   return (
@@ -122,11 +123,16 @@ export function DateCommandField({
       onSubmit={(e) => {
         e.preventDefault();
         const date = dateOnlySchema.safeParse(draft);
-        if (date.success) {
+        if (date.success && draft !== value && draft !== submitted.current) {
+          submitted.current = draft;
           setError("");
           void Promise.resolve()
             .then(() => apply(date.data))
+            .then((ok) => {
+              if (!ok) submitted.current = value;
+            })
             .catch(() => {
+              submitted.current = value;
               setError("Дата выходит за поддерживаемый календарный диапазон.");
             });
         }

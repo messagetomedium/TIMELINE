@@ -1,7 +1,7 @@
 import type { CSSProperties } from 'react';
 import type { DateOnly, ProjectDocument } from '../../domain';
 import type { CalendarGeometry } from '../../domain/calendar';
-import { widthForInterval, xForDate } from '../../domain/timeline';
+import { timeFragments } from '../../domain/SegmentAxis';
 import type { TimelineCamera } from '../../domain/timeline';
 import { DateLines, TimeGrid } from './CalendarLayers';
 
@@ -39,9 +39,8 @@ export function PerformersSection({ document, camera, width, calendar, weekends,
               const item = assignment.targetType === 'process' ? document.processes.find((process) => process.id === assignment.targetId) : document.tasks.find((task) => task.id === assignment.targetId);
               if (!item) return null;
               const parent = assignment.targetType === 'process' ? document.processes.find((process) => process.id === item.id) : document.processes.find((process) => 'processId' in item && process.id === item.processId);
-              const style = { left: xForDate(item.startDate, camera), width: widthForInterval(item, camera), '--bar-color': parent?.color } as CSSProperties;
-              return <div data-interactive key={assignment.id} className={`performer-segment ${related.has(item.id) ? 'linked' : ''}`} data-target-id={item.id} style={style}
-                title={`${assignment.roleLabel} · ${person.displayName ?? ''} · ${item.title}`} onMouseEnter={() => { onHover(item.id); }} onMouseLeave={() => { onHover(null); }} />;
+              return timeFragments(item,camera).map(f=><div data-interactive key={`${assignment.id}:${f.startDate}`} className={`performer-segment ${related.has(item.id) ? 'linked' : ''}`} data-target-id={item.id} style={{left:f.x,width:f.width,'--bar-color':parent?.color} as CSSProperties}
+                title={`${assignment.roleLabel} · ${person.displayName ?? ''} · ${item.title}`} onMouseEnter={() => { onHover(item.id); }} onMouseLeave={() => { onHover(null); }} />);
             })}</div>
           </div>;
         })}

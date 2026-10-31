@@ -77,6 +77,7 @@ export const viewPreferencesSchema = z.strictObject({
   projectId: projectIdSchema, gridStep: gridStepSchema,
   zoomPxPerDay: z.number().positive(), cameraX: z.number(), cameraY: z.number(),
   showWeekends: z.boolean(),
+  showResults: z.boolean().optional(),
   expandedProcessIds: z.array(processIdSchema).readonly(),
   expandedAssigneeGroupIds: z.array(assignmentIdSchema).readonly(),
   showPeoplePanel: z.boolean(),

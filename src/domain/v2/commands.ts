@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { snapshotSchema, checkpointSchema, checkpointDate } from "./model";
+import { snapshotSchema, checkpointSchema, checkpointDate, entityId } from "./model";
 import type { Snapshot } from "./model";
 import { dateOnlySchema } from "../schema";
 import { addDays, shiftInterval } from "../dates";
@@ -36,9 +36,12 @@ const timelineSchema = z.discriminatedUnion("type", [
     date: dateOnlySchema,
   }),
 ]);
-const textTarget = z.enum(["project", "stage", "process", "task"]);
+import { resultCommands, applyResult } from './results';
+const textTarget = z.enum(["project", "stage", "process", "task", "checkpoint"]);
 export const commandSchema = z.discriminatedUnion("type", [
   ...stageCommandSchemas,
+  ...resultCommands,
+  z.strictObject({type:z.literal("SetCheckpointTiming"),id:z.uuid(),timing:checkpointSchema.shape.timing}),
   z.strictObject({
     type: z.literal("Rename"),
     kind: textTarget,
@@ -90,6 +93,9 @@ export function applyCommand(
         ...d.project,
         [c.type === "Rename" ? "name" : "description"]: c.value,
       };
+    } else if(c.kind === "checkpoint") {
+      if(!d.checkpoints.some(x=>x.id===c.id)) throw Error("Чекпойнт не найден");
+      d.checkpoints=d.checkpoints.map(x=>x.id===c.id?{...x,[c.type==="Rename"?"title":"note"]:c.value}:x);
     } else {
       const key =
         c.kind === "stage"
@@ -126,6 +132,10 @@ export function applyCommand(
             : x,
         );
     }
+  } else if (c.type === "SetCheckpointTiming") {
+    const checkpoint=d.checkpoints.find(x=>x.id===c.id);
+    if(!checkpoint) throw Error("Чекпойнт не найден");
+    checkpoint.timing=c.timing;
   } else if (c.type === "UpdateCheckpoint") {
     if (!d.checkpoints.some((x) => x.id === c.id))
       throw Error("Чекпойнт не найден");
@@ -189,6 +199,8 @@ export function applyCommand(
           }
         : x,
     );
+  } else if(c.type === "UpdateResult" || c.type === "CreateStandaloneResult" || c.type === "SetResultPlaced" || c.type === "MoveResult" || c.type === "DeleteResult") {
+    applyResult(d,c);
   } else {
     applyStagePlan(d, c);
   }
@@ -200,6 +212,7 @@ const collections = [
   "tasks",
   "checkpoints",
   "results",
+  "resultPlacements",
 ] as const;
 function content(entity: object) {
   return JSON.stringify(
@@ -213,7 +226,7 @@ function content(entity: object) {
 function finalize(source: Snapshot, d: Snapshot): Snapshot {
   for (const key of collections)
     for (const entity of d[key]) {
-      const old = source[key].find((x) => x.id === entity.id);
+      const old = source[key].find((x) => entityId(x) === entityId(entity));
       entity.revision = old
         ? old.revision + (content(old) === content(entity) ? 0 : 1)
         : 0;
@@ -248,11 +261,12 @@ export function planCommand(source: Snapshot, command: ContentCommand) {
     ...d.tasks,
     ...d.checkpoints,
     ...d.results,
+    ...d.resultPlacements,
   ];
   const before = new Map(
-      entities(source).map((e) => [e.id, JSON.stringify(e)]),
+      entities(source).map((e) => [("resultId" in e ? "placement:" : "")+entityId(e), JSON.stringify(e)]),
     ),
-    after = new Map(entities(document).map((e) => [e.id, JSON.stringify(e)]));
+    after = new Map(entities(document).map((e) => [("resultId" in e ? "placement:" : "")+entityId(e), JSON.stringify(e)]));
   const affectedIds = [...new Set([...before.keys(), ...after.keys()])].filter(
     (id) => before.get(id) !== after.get(id),
   );

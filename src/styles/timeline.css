@@ -152,3 +152,24 @@
 .date-command-field label { display: flex; flex-direction: column; gap: 5px; }
 .date-command-field button { align-self: flex-end; font-size: 12px; }
 .foundation-stage-band .stage-grip { top: 30px; }
+
+/* Result gaps have fixed screen width and contain no calendar cells. */
+.result-calendar-gap { position: absolute; top: 0; bottom: 0; padding: 15px 12px; border-inline: 1px solid #cfc8df; background: #eeeaf5; color: #65557d; font-size: 12px; font-weight: 600; }
+.result-calendar-gap small { display: block; font-size: 10px; font-weight: 400; margin-top: 10px; }
+.result-columns { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
+.result-column { position: absolute; top: 0; bottom: 0; border-inline: 1px solid #d8d1e5; background: #f4f1f8; }
+.result-column-tools { position: absolute; top: 0; right: 4px; z-index: 2; pointer-events: auto; }
+.result-column-tools button { border: 0; background: #eee7f7; color: #685282; border-radius: 3px; font-size: 10px; padding: 2px 6px; }
+.result-tile { position: absolute; left: 8px; width: 244px; height: 56px; display: flex; border: 1px solid #bfb0d5; border-radius: 6px; background: #fff; pointer-events: auto; box-shadow: 0 1px 2px #49405d15; }
+.result-preview { outline: 2px solid #8875a8; }
+.result-move { width: 22px; flex-shrink: 0; border: 0; background: #efeaf5; cursor: ns-resize; color: #80718f; touch-action: none; }
+.result-select { border: 0; background: transparent; text-align: left; min-width: 0; flex: 1; padding: 6px; color: #514362; overflow: hidden; }
+.result-select strong { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+.result-select small { display: block; font-size: 9px; margin-top: 4px; color: #95879f; }
+.result-fields { border-top: 1px solid #e8e1ef; margin-top: 18px; padding-top: 12px; }
+.result-fields h3 { font-size: 12px; color: #746382; }
+.result-fields label { display: block; font-size: 11px; margin: 10px 0; }
+.result-fields textarea { width: 100%; margin-top: 5px; }
+.inline-title input { width: 100%; height: 100%; padding: 0; border: 0; font: inherit; outline: 0; }
+.checkpoint-line { touch-action: none; transform: translateX(-4px); }
+.performers-time-background::after { pointer-events: none; }

@@ -60,6 +60,11 @@ export const resultSchema = z.strictObject({
   description: z.string(),
   revision: z.number().int().nonnegative(),
 });
+export const resultPlacementSchema = z.strictObject({
+  ...scope, resultId: uuid, isPlaced: z.boolean(), hiddenByUser: z.boolean(),
+  layoutMode: z.enum(['auto','manual']), sortIndex: z.number().int().nonnegative(),
+  manualY: z.number().nonnegative(), revision: z.number().int().nonnegative(),
+});
 export const personSchema = z.strictObject({
   id: uuid,
   workspaceId: uuid,
@@ -111,6 +116,7 @@ export const snapshotSchema = z
     tasks: z.array(taskSchema.unwrap().extend(scope)),
     checkpoints: z.array(checkpointSchema),
     results: z.array(resultSchema),
+    resultPlacements: z.array(resultPlacementSchema).default([]),
     viewPreferences: viewPreferencesSchema,
   })
   .superRefine((d, ctx) => {
@@ -190,6 +196,12 @@ export const snapshotSchema = z
         fail("У процесса только один результат");
       if (r.processId) linked.add(r.processId);
     }
+    const placements = new Set<string>();
+    for (const p of d.resultPlacements) {
+      if (placements.has(p.resultId) || !d.results.some(r=>r.id===p.resultId) || p.projectId!==d.project.id || p.workspaceId!==d.project.workspaceId) fail('Некорректное размещение результата');
+      placements.add(p.resultId);
+      if (p.isPlaced && (p.hiddenByUser || !d.results.find(r=>r.id===p.resultId)?.title.trim())) fail('Пустой или скрытый результат нельзя разместить');
+    }
     for (const list of [d.processes, d.tasks]) {
       const byLane = new Map<string, (typeof list)[number][]>();
       for (const e of list) {
@@ -212,6 +224,9 @@ export const snapshotSchema = z
       fail("Некорректные настройки проекта");
   });
 export type Snapshot = z.infer<typeof snapshotSchema>;
+export type Result = z.infer<typeof resultSchema>;
+export type ResultPlacement = z.infer<typeof resultPlacementSchema>;
+export const entityId = (e: {id:string}|{resultId:string}) => "id" in e ? e.id : e.resultId;
 export type Checkpoint = z.infer<typeof checkpointSchema>;
 export const checkpointDate = (d: Snapshot, c: Checkpoint) =>
   c.timing.anchor === "free"

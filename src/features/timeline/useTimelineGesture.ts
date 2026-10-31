@@ -1,3 +1,6 @@
+import type { GestureCommand } from "../../domain/v2/gesture";
+import { positionAtX, anchorPosition } from "../../domain/SegmentAxis";
+import type { DateOnly } from "../../domain";
 import type { Snapshot } from "../../domain/v2/model";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Dispatch, PointerEvent, RefObject, SetStateAction } from "react";
@@ -9,7 +12,6 @@ import { applyTimelineCommand } from "../../application/timelineCommands";
 import type {
   CommandResult,
   Selection,
-  TimelineCommand,
 } from "../../application/timelineCommands";
 
 export type PreviewResult = CommandResult & {
@@ -22,7 +24,12 @@ type Operation =
       readonly target: Selection;
       readonly action: "move" | "start" | "end";
     }
-  | { readonly kind: "stage"; readonly id: StageMarkerId };
+  | { readonly kind: "stage"; readonly id: StageMarkerId }
+  | {
+      readonly kind: "checkpoint";
+      readonly id: string;
+      readonly date: DateOnly;
+    };
 interface Gesture {
   readonly pointerId: number;
   readonly x: number;
@@ -32,7 +39,7 @@ interface Gesture {
   readonly scrollTop: number;
   readonly operation: Operation | null;
   last: PreviewResult | null;
-  command: TimelineCommand | null;
+  command: GestureCommand | null;
 }
 interface Props {
   readonly document: ProjectDocument;
@@ -43,10 +50,10 @@ interface Props {
   readonly setCamera: Dispatch<SetStateAction<TimelineCamera>>;
   readonly onCommit: (document: ProjectDocument) => void;
   readonly evaluate?:
-    | ((document: ProjectDocument, command: TimelineCommand) => PreviewResult)
+    | ((document: ProjectDocument, command: GestureCommand) => PreviewResult)
     | undefined;
   readonly onCommand?:
-    | ((command: TimelineCommand, expectedRevision: number) => void)
+    | ((command: GestureCommand, expectedRevision: number) => void)
     | undefined;
   readonly onError: (message: string) => void;
   readonly onStageClick: (id: StageMarkerId) => void;
@@ -62,7 +69,10 @@ export function useTimelineGesture({
   onCommit,
   onError,
   onStageClick,
-  evaluate = applyTimelineCommand,
+  evaluate = (d, c) =>
+    c.type === "checkpoint"
+      ? { ok: false, error: "Чекпойнты доступны в редакторе V2" }
+      : applyTimelineCommand(d, c),
   onCommand,
 }: Props) {
   const gesture = useRef<Gesture | null>(null);
@@ -100,6 +110,11 @@ export function useTimelineGesture({
 
   const begin = (event: PointerEvent, operation: Operation | null) => {
     if (gesture.current || (operation && event.button !== 0)) return;
+    if (
+      window.document.activeElement instanceof HTMLInputElement ||
+      window.document.activeElement instanceof HTMLTextAreaElement
+    )
+      window.document.activeElement.blur();
     event.preventDefault();
     event.stopPropagation();
     onError("");
@@ -138,10 +153,32 @@ export function useTimelineGesture({
       return;
     }
     if (Math.abs(dx) < 3 && !current.last) return;
-    const days = Math.round(dx / current.camera.pxPerDay);
+    const left =
+      surface.current?.querySelector(".calendar-time")?.getBoundingClientRect()
+        .left ?? 0;
+    const hit = positionAtX(event.clientX - left, current.camera);
+    if (hit.kind === "resultGap") {
+      current.last = {
+        ok: false,
+        error:
+          "Перенос внутри колонки результатов недоступен. Отпустите объект на календаре.",
+      };
+      setInvalid(true);
+      onError(current.last.error);
+      return;
+    }
+    const days = Math.round(
+      hit.datePosition - anchorPosition(current.x - left, current.camera),
+    );
     const operation = current.operation;
-    let command: TimelineCommand;
-    if (operation.kind === "stage") {
+    let command: GestureCommand;
+    if (operation.kind === "checkpoint") {
+      command = {
+        type: "checkpoint",
+        id: operation.id,
+        date: snapDate(addDays(operation.date, days), step),
+      };
+    } else if (operation.kind === "stage") {
       const stage = current.document.stageMarkers.find(
         (item) => item.id === operation.id,
       );
@@ -197,6 +234,20 @@ export function useTimelineGesture({
       onError("Проект изменился во время жеста. Повторите перенос.");
       return;
     }
+    const left =
+      surface.current?.querySelector(".calendar-time")?.getBoundingClientRect()
+        .left ?? 0;
+    if (
+      current.operation &&
+      current.last &&
+      positionAtX(event.clientX - left, current.camera).kind === "resultGap"
+    ) {
+      cancel();
+      onError(
+        "Перенос внутри колонки результатов недоступен. Отпустите объект на календаре.",
+      );
+      return;
+    }
     gesture.current = null;
     if (current.last?.ok) {
       if (onCommand && current.command)
@@ -232,6 +283,9 @@ export function useTimelineGesture({
     },
     startStage: (event: PointerEvent, id: StageMarkerId) => {
       begin(event, { kind: "stage", id });
+    },
+    startCheckpoint: (event: PointerEvent, id: string, date: DateOnly) => {
+      begin(event, { kind: "checkpoint", id, date });
     },
     startPan: (event: PointerEvent) => {
       const target = event.target;

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { CommitText } from './CommitText';
 import type { CSSProperties, PointerEvent } from 'react';
 import type { Process, Task } from '../../domain';
 import type { Selection } from '../../application/timelineCommands';
@@ -24,7 +25,6 @@ interface Props {
 
 export function TimelineBar({ item, target, camera, viewportWidth, y, color, selected, highlighted, expanded, toggle, onSelect, onRename, onHover, onGesture }: Props) {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(item.title);
   const style: CSSProperties = { left: xForDate(item.startDate, camera), top: y, width: widthForInterval(item, camera), '--bar-color': color } as CSSProperties;
   const inView = xForDate(item.startDate, camera) < viewportWidth && xForDate(item.endDateExclusive, camera) > 0;
   const visibleInset = inView ? Math.max(0, -xForDate(item.startDate, camera)) : 0;
@@ -38,13 +38,7 @@ export function TimelineBar({ item, target, camera, viewportWidth, y, color, sel
       onMouseEnter={() => { onHover(item.id); }} onMouseLeave={() => { onHover(null); }}>
       <button className="resize-handle start" aria-label={`Изменить начало: ${item.title}`} onPointerDown={(event) => { onGesture(event, target, 'start'); }} />
       <button className="move-handle" style={{ left: visibleInset + 7 }} aria-label={`Переместить: ${item.title}`} onPointerDown={(event) => { onGesture(event, target, 'move'); }}>⠿</button>
-      {editing ? <input autoFocus className="inline-title" style={{ left: visibleInset + 22, width: Math.min(widthForInterval(item, camera) - visibleInset - 28, viewportWidth - 28) }} aria-label="Название на полосе" value={draft}
-        onChange={(event) => { setDraft(event.target.value); }} onPointerDown={(event) => { event.stopPropagation(); }}
-        onBlur={() => { setEditing(false); }} onKeyDown={(event) => {
-          event.stopPropagation();
-          if (event.key === 'Escape') setEditing(false);
-          if (event.key === 'Enter') { onRename(target, draft); setEditing(false); }
-        }} /> : <span className="bar-title" style={{ position: 'absolute', left: visibleInset + 24, right: target.kind === 'process' ? rightInset + 16 : inView ? Math.max(6, xForDate(item.endDateExclusive, camera) - viewportWidth + 6) : 6, width: 'auto', padding: 0 }} onDoubleClick={(event) => { event.stopPropagation(); setDraft(item.title); setEditing(true); }}>{item.title}</span>}
+      {editing ? <div className="inline-title" style={{left:visibleInset+22,width:Math.min(widthForInterval(item,camera)-visibleInset-28,viewportWidth-28)}} onPointerDown={e=>{e.stopPropagation();}}><CommitText key={item.title} input autoFocus label="Название на полосе" value={item.title} onCommit={value=>{onRename(target,value);}} onFinish={()=>{setEditing(false);}}/></div> : <span className="bar-title" style={{ position: 'absolute', left: visibleInset + 24, right: target.kind === 'process' ? rightInset + 16 : inView ? Math.max(6, xForDate(item.endDateExclusive, camera) - viewportWidth + 6) : 6, width: 'auto', padding: 0 }} onDoubleClick={(event) => { event.stopPropagation(); setEditing(true); }}>{item.title}</span>}
       {toggle && <button className="expand-handle" style={{ right: rightInset }} aria-label={`${expanded ? 'Свернуть' : 'Раскрыть'}: ${item.title}`} aria-expanded={expanded}
         onClick={(event) => { event.stopPropagation(); toggle(); }}>{expanded ? '⌃' : '⌄'}</button>}
       <button className="resize-handle end" aria-label={`Изменить окончание: ${item.title}`} onPointerDown={(event) => { onGesture(event, target, 'end'); }} />

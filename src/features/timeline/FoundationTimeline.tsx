@@ -1,7 +1,11 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { addDays, dateOnlySchema } from "../../domain";
 import { displayDocument, checkpointDate } from "../../domain/v2/model";
 import type { Snapshot } from "../../domain/v2/model";
+import { RESULT_COLUMN_WIDTH, xBefore } from "../../domain/SegmentAxis";
+import { resultLayout } from "../../domain/v2/results";
+import { ResultFields, ResultColumns } from "./ResultUI";
+import { CommitText } from "./CommitText";
 import { planCommand } from "../../domain/v2/commands";
 import type { Selection } from "../../application/timelineCommands";
 import type { ViewPreferences, ProjectId, StageMarkerId } from "../../domain";
@@ -16,7 +20,22 @@ import { TimelineWorkspace } from "./TimelineWorkspace";
 import { layoutTimeline } from "../../application/timelineLayout";
 import { xForDate, widthForInterval } from "../../domain/timeline";
 
-type Special = { kind: "stage" | "checkpoint" | "project"; id: string };
+type Special = {
+  kind: "stage" | "checkpoint" | "project" | "result";
+  id: string;
+};
+function processPositions(
+  scene: Snapshot,
+  layout: ReturnType<typeof layoutTimeline>,
+) {
+  return new Map(
+    scene.processes.map((p) => [
+      p.id,
+      layout.rows.find((r) => r.kind === "process" && r.id === p.laneId)?.y ??
+        18,
+    ]),
+  );
+}
 export function FoundationTimeline({
   snapshot,
   onCommand,
@@ -83,7 +102,16 @@ export function FoundationTimeline({
           },
           evaluate: (_, command) => {
             try {
-              const plan = planCommand(snapshot, { type: "Timeline", command });
+              const plan = planCommand(
+                snapshot,
+                command.type === "checkpoint"
+                  ? {
+                      type: "SetCheckpointTiming",
+                      id: command.id,
+                      timing: { anchor: "free", date: command.date },
+                    }
+                  : { type: "Timeline", command },
+              );
               return {
                 ok: true,
                 document: displayDocument(plan.document),
@@ -98,7 +126,49 @@ export function FoundationTimeline({
             }
           },
           onCommand: (command, revision) => {
-            void onCommand({ type: "Timeline", command }, revision);
+            void onCommand(
+              command.type === "checkpoint"
+                ? {
+                    type: "SetCheckpointTiming",
+                    id: command.id,
+                    timing: { anchor: "free", date: command.date },
+                  }
+                : { type: "Timeline", command },
+              revision,
+            );
+          },
+          gaps: (scene) =>
+            (scene ?? snapshot).stages.map((s) => ({
+              stageId: s.id,
+              boundary: s.endDateExclusive,
+              width: RESULT_COLUMN_WIDTH,
+            })),
+          resultsHeight: (scene, layout) =>
+            Math.max(
+              0,
+              ...resultLayout(
+                scene ?? snapshot,
+                processPositions(scene ?? snapshot, layout),
+              ).map((t) => t.y + t.height + 24),
+            ),
+          results: (camera, scene, layout) => (
+            <ResultColumns
+              snapshot={scene ?? snapshot}
+              camera={camera}
+              processY={processPositions(scene ?? snapshot, layout)}
+              onSelect={(id) => {
+                setSpecial({ kind: "result", id });
+              }}
+              onCommand={onCommand}
+            />
+          ),
+          onRename: (target, title) => {
+            void onCommand({
+              type: "Rename",
+              kind: target.kind,
+              id: target.id,
+              value: title,
+            });
           },
           onStageSelect: (id: StageMarkerId) => {
             setSpecial({ kind: "stage", id });
@@ -193,7 +263,7 @@ export function FoundationTimeline({
               </div>
             );
           },
-          checkpoints: (camera, preview) => {
+          checkpoints: (camera, preview, start) => {
             const scene = preview ?? snapshot;
             return scene.checkpoints.map((c) => (
               <button
@@ -203,11 +273,20 @@ export function FoundationTimeline({
                 data-checkpoint-id={c.id}
                 data-date={checkpointDate(scene, c)}
                 style={{
-                  left:
-                    xForDate(checkpointDate(scene, c), camera) +
-                    camera.pxPerDay,
+                  left: xBefore(addDays(checkpointDate(scene, c), 1), camera),
                 }}
                 aria-label={`Чекпойнт: ${c.title}`}
+                title={
+                  c.timing.anchor === "project_end"
+                    ? "Привязан к окончанию проекта. Для ручного переноса снимите привязку в свойствах."
+                    : "Перетащите для изменения даты. Esc — отмена."
+                }
+                onPointerDown={(e) => {
+                  if (c.timing.anchor === "free") {
+                    start(e, c.id, checkpointDate(scene, c));
+                    setSpecial({ kind: "checkpoint", id: c.id });
+                  }
+                }}
                 onClick={() => {
                   setSpecial({ kind: "checkpoint", id: c.id });
                 }}
@@ -248,10 +327,13 @@ export function FoundationTimeline({
           ),
           inspector: (selection, preview) => (
             <FoundationInspector
-              key={`${currentSpecial?.id ?? selection?.id ?? "none"}:${String(snapshot.project.revision)}`}
+              key={currentSpecial?.id ?? selection?.id ?? "none"}
               snapshot={preview ?? snapshot}
               target={currentSpecial ?? selection}
               onCommand={onCommand}
+              onResultSelect={(id) => {
+                setSpecial({ kind: "result", id });
+              }}
             />
           ),
         }}
@@ -272,15 +354,21 @@ function FoundationInspector({
   snapshot,
   target,
   onCommand,
+  onResultSelect,
 }: {
   snapshot: Snapshot;
   target: Special | Selection | null;
   onCommand: SendCommand;
+  onResultSelect: (id: string) => void;
 }) {
   const checkpoint =
     target?.kind === "checkpoint"
       ? snapshot.checkpoints.find((c) => c.id === target.id)
-      : null;
+      : undefined;
+  const result =
+    target?.kind === "result"
+      ? snapshot.results.find((r) => r.id === target.id)
+      : undefined;
   const item =
     target?.kind === "project"
       ? snapshot.project
@@ -288,15 +376,31 @@ function FoundationInspector({
         ? snapshot.stages.find((s) => s.id === target.id)
         : target?.kind === "process"
           ? snapshot.processes.find((p) => p.id === target.id)
-          : snapshot.tasks.find((t) => t.id === target?.id);
-  const initialTitle =
+          : target?.kind === "task"
+            ? snapshot.tasks.find((t) => t.id === target.id)
+            : undefined;
+  if (!target || (!item && !checkpoint && !result))
+    return (
+      <aside className="details-inspector" aria-label="Свойства элемента">
+        Выберите элемент
+      </aside>
+    );
+  const labels = {
+    project: "Проект",
+    stage: "Этап",
+    process: "Процесс",
+    task: "Задача",
+    checkpoint: "Чекпойнт",
+    result: "Результат",
+  };
+  const title =
     checkpoint?.title ??
     (item && "name" in item
       ? item.name
       : item && "title" in item
         ? item.title
         : "");
-  const initialDescription =
+  const description =
     checkpoint?.note ??
     (item && "description" in item
       ? item.description
@@ -304,41 +408,6 @@ function FoundationInspector({
         ? item.details
         : "") ??
     "";
-  const [title, setTitle] = useState(initialTitle),
-    [description, setDescription] = useState(initialDescription);
-  const [date, setDate] = useState(
-    checkpoint ? checkpointDate(snapshot, checkpoint) : "",
-  );
-  const [anchor, setAnchor] = useState(
-    checkpoint?.timing.anchor === "project_end",
-  );
-  if (!target)
-    return (
-      <aside className="details-inspector" aria-label="Свойства элемента">
-        Выберите элемент
-      </aside>
-    );
-  const kind = target.kind;
-  const labels = {
-    project: "Проект",
-    stage: "Этап",
-    process: "Процесс",
-    task: "Задача",
-    checkpoint: "Чекпойнт",
-  };
-  const saveTitle = () => {
-    if (title !== initialTitle && kind !== "checkpoint")
-      void onCommand({ type: "Rename", kind, id: target.id, value: title });
-  };
-  const saveDescription = () => {
-    if (description !== initialDescription && kind !== "checkpoint")
-      void onCommand({
-        type: "Describe",
-        kind,
-        id: target.id,
-        value: description,
-      });
-  };
   return (
     <aside
       className="details-inspector"
@@ -347,116 +416,136 @@ function FoundationInspector({
     >
       <div className="inspector-top">
         <p className="inspector-kicker">СВОЙСТВА</p>
-        <span className="inspector-type">{labels[kind]}</span>
+        <span className="inspector-type">{labels[target.kind]}</span>
       </div>
-      <label className="inspector-label" htmlFor="v2-title">
-        Название
-      </label>
-      <textarea
-        id="v2-title"
-        value={title}
-        onChange={(e) => {
-          setTitle(e.target.value);
-        }}
-        onBlur={saveTitle}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            e.currentTarget.blur();
-          }
-          if (e.key === "Escape") {
-            setTitle(initialTitle);
-            e.stopPropagation();
-          }
-        }}
-      />
-      <label className="inspector-label" htmlFor="v2-description">
-        {checkpoint ? "Заметка" : "Описание"}
-      </label>
-      <textarea
-        id="v2-description"
-        rows={4}
-        value={description}
-        onChange={(e) => {
-          setDescription(e.target.value);
-        }}
-        onBlur={saveDescription}
-      />
-      {checkpoint ? (
+      {target.kind !== "result" && (
         <>
-          <label className="inspector-label" htmlFor="checkpoint-date">
-            Дата чекпойнта
+          <label className="inspector-label" htmlFor="v2-title">
+            Название
           </label>
-          <input
-            id="checkpoint-date"
-            type="date"
-            disabled={anchor}
-            value={
-              anchor ? addDays(snapshot.project.endDateExclusive, -1) : date
-            }
-            onChange={(e) => {
-              setDate(e.target.value);
+          <CommitText
+            key={`title:${title}`}
+            id="v2-title"
+            value={title}
+            onCommit={(value) => {
+              if (target.kind !== "result")
+                void onCommand({
+                  type: "Rename",
+                  kind: target.kind,
+                  id: target.id,
+                  value,
+                });
             }}
           />
-          <label className="checkbox-label">
-            <input
-              type="checkbox"
-              checked={anchor}
-              onChange={(e) => {
-                setAnchor(e.target.checked);
-                if (!e.target.checked)
-                  setDate(checkpointDate(snapshot, checkpoint));
-              }}
-            />
-            Привязать к дате окончания проекта
+          <label className="inspector-label" htmlFor="v2-description">
+            {checkpoint ? "Заметка" : "Описание"}
           </label>
-          <p className="inspector-note">
-            При привязке дата следует за включительным окончанием проекта.
-            Свободная дата сохраняется при изменении его длительности.
-          </p>
-          <button
-            className="primary-button"
-            disabled={
-              !title.trim() ||
-              (!anchor && !dateOnlySchema.safeParse(date).success)
-            }
-            onClick={() => {
-              void onCommand({
-                type: "UpdateCheckpoint",
-                id: checkpoint.id,
-                title,
-                note: description,
-                timing: anchor
-                  ? { anchor: "project_end" }
-                  : { anchor: "free", date: dateOnlySchema.parse(date) },
-              });
+          <CommitText
+            key={`description:${description}`}
+            id="v2-description"
+            value={description}
+            multiline
+            onCommit={(value) => {
+              if (target.kind !== "result")
+                void onCommand({
+                  type: "Describe",
+                  kind: target.kind,
+                  id: target.id,
+                  value,
+                });
             }}
-          >
-            Сохранить чекпойнт
-          </button>
+          />
         </>
-      ) : item && "startDate" in item ? (
+      )}
+      {checkpoint && (
+        <CheckpointTiming
+          key={JSON.stringify(checkpoint.timing)}
+          snapshot={snapshot}
+          checkpoint={checkpoint}
+          onCommand={onCommand}
+        />
+      )}
+      {item && "startDate" in item && (
         <div className="inspector-section">
           <span className="inspector-label">Даты</span>
           <p>
             {item.startDate} — {addDays(item.endDateExclusive, -1)}
           </p>
         </div>
-      ) : null}
-      {kind === "process" && item && "stageId" in item && (
-        <p>Этап: {snapshot.stages.find((s) => s.id === item.stageId)?.title}</p>
       )}
-      {kind === "stage" && (
-        <StageActions
+      {target.kind === "process" && item && "stageId" in item && (
+        <>
+          <p>
+            Этап: {snapshot.stages.find((s) => s.id === item.stageId)?.title}
+          </p>
+          <ResultFields
+            snapshot={snapshot}
+            result={snapshot.results.find((r) => r.processId === item.id)}
+            processId={item.id}
+            stageId={item.stageId}
+            onCommand={onCommand}
+          />
+        </>
+      )}
+      {result && (
+        <ResultFields
           snapshot={snapshot}
-          id={target.id}
+          result={result}
+          processId={result.processId}
+          stageId={result.stageId}
           onCommand={onCommand}
         />
       )}
-      {kind === "project" && (
+      {target.kind === "stage" && (
+        <>
+          <StageActions
+            snapshot={snapshot}
+            id={target.id}
+            onCommand={onCommand}
+          />
+          <section className="result-fields">
+            <h3>Результаты этапа</h3>
+            <button
+              className="quiet-button"
+              onClick={() => {
+                const id = crypto.randomUUID();
+                void onCommand({
+                  type: "CreateStandaloneResult",
+                  id,
+                  stageId: target.id,
+                  title: "Новый результат",
+                }).then((ok) => {
+                  if (ok) onResultSelect(id);
+                });
+              }}
+            >
+              Добавить самостоятельный результат
+            </button>
+            {snapshot.results
+              .filter((r) => r.stageId === target.id)
+              .map((r) => (
+                <button
+                  className="quiet-button"
+                  key={r.id}
+                  onClick={() => {
+                    onResultSelect(r.id);
+                  }}
+                >
+                  {r.title || "Без названия"}
+                  {snapshot.resultPlacements.find((p) => p.resultId === r.id)
+                    ?.hiddenByUser
+                    ? " · скрыт"
+                    : ""}
+                </button>
+              ))}
+          </section>
+        </>
+      )}
+      {target.kind === "project" && (
         <section className="stage-actions">
           <h3>Границы проекта</h3>
           <DateCommandField
+            key={`start:${snapshot.project.startDate}`}
             label="Начало проекта"
             value={snapshot.project.startDate}
             apply={(date) =>
@@ -464,6 +553,7 @@ function FoundationInspector({
             }
           />
           <DateCommandField
+            key={`end:${snapshot.project.endDateExclusive}`}
             label="Окончание проекта включительно"
             value={addDays(snapshot.project.endDateExclusive, -1)}
             apply={(date) =>
@@ -481,13 +571,95 @@ function FoundationInspector({
         </section>
       )}
       <p className="inspector-note">
-        Работы толкают соседей в своей строке. Родители расширяются при
-        необходимости; один жест — одна отмена.
+        Работы толкают соседей в своей строке. Один жест — одна отмена.
       </p>
       <p className="memory-notice">
-        Сохранено локально в этом браузере. История отмены действует в текущем
-        сеансе.
+        Сохранено локально в этом браузере. История Undo/Redo сохраняется после
+        перезагрузки и отдельно для каждого проекта.
       </p>
     </aside>
+  );
+}
+function CheckpointTiming({
+  snapshot,
+  checkpoint,
+  onCommand,
+}: {
+  snapshot: Snapshot;
+  checkpoint: Snapshot["checkpoints"][number];
+  onCommand: SendCommand;
+}) {
+  const [date, setDate] = useState<string>(
+      checkpointDate(snapshot, checkpoint),
+    ),
+    [anchor, setAnchor] = useState(checkpoint.timing.anchor === "project_end");
+  const original = JSON.stringify(checkpoint.timing),
+    submitted = useRef(original);
+  const timing = anchor
+    ? { anchor: "project_end" as const }
+    : { anchor: "free" as const, date: dateOnlySchema.safeParse(date).data };
+  const next = JSON.stringify(timing);
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (
+          next === original ||
+          next === submitted.current ||
+          (!anchor && !timing.date)
+        )
+          return;
+        submitted.current = next;
+        void onCommand({
+          type: "SetCheckpointTiming",
+          id: checkpoint.id,
+          timing: anchor
+            ? { anchor: "project_end" }
+            : { anchor: "free", date: dateOnlySchema.parse(date) },
+        }).then((ok) => {
+          if (!ok) submitted.current = original;
+        });
+      }}
+    >
+      <label className="inspector-label" htmlFor="checkpoint-date">
+        Дата чекпойнта
+      </label>
+      <input
+        id="checkpoint-date"
+        type="date"
+        min="0001-01-01"
+        max="9999-12-31"
+        disabled={anchor}
+        value={anchor ? addDays(snapshot.project.endDateExclusive, -1) : date}
+        onChange={(e) => {
+          setDate(e.target.value);
+        }}
+      />
+      <label className="checkbox-label">
+        <input
+          type="checkbox"
+          checked={anchor}
+          onChange={(e) => {
+            setAnchor(e.target.checked);
+            if (!e.target.checked)
+              setDate(checkpointDate(snapshot, checkpoint));
+          }}
+        />
+        Привязать к дате окончания проекта
+      </label>
+      <p className="inspector-note">
+        При привязке ручной перенос недоступен. Снимите флажок, чтобы перемещать
+        чекпойнт мышью.
+      </p>
+      <button
+        className="primary-button"
+        disabled={
+          next === original ||
+          (!anchor && !dateOnlySchema.safeParse(date).success)
+        }
+      >
+        Сохранить чекпойнт
+      </button>
+    </form>
   );
 }

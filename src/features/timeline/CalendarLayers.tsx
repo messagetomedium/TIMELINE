@@ -1,37 +1,28 @@
 import type { PointerEvent } from 'react';
 import type { DateOnly, ProjectDocument, StageMarkerId } from '../../domain';
-import type { CalendarCell, CalendarGeometry } from '../../domain/calendar';
+import type { CalendarGeometry } from '../../domain/calendar';
+import { timeFragments, xBefore } from '../../domain/SegmentAxis';
 import { widthForInterval, xForDate } from '../../domain/timeline';
 import type { TimelineCamera } from '../../domain/timeline';
 
-function cellPosition(cell: CalendarCell, camera: TimelineCamera, viewportWidth: number) {
-  const left = xForDate(cell.start, camera);
-  const width = widthForInterval({ startDate: cell.start, endDateExclusive: cell.endExclusive }, camera);
-  const inset = Math.max(0, -left);
-  return { left, width, inset, available: Math.max(0, Math.min(width - inset, viewportWidth - Math.max(0, left))) };
+function position(x:number, width:number, viewport:number) {
+ const inset=Math.max(0,-x);
+ return {left:x,width,inset,available:Math.max(0,Math.min(width-inset,viewport-Math.max(0,x)))};
 }
-
-export function CalendarRuler({ camera, width, calendar, today }: { readonly camera: TimelineCamera; readonly width: number; readonly calendar: CalendarGeometry; readonly today: DateOnly }) {
-  return <div className="calendar-ruler" aria-label="Календарная шкала">
-    {calendar.months.map((month) => {
-      const position = cellPosition(month, camera, width);
-      const full = `${month.label} ${month.secondaryLabel}`;
-      const short = `${month.shortLabel} ${month.secondaryLabel}`;
-      const label = position.available >= full.length * 6.5 + 18 ? full : position.available >= short.length * 6.5 + 14 ? short : '';
-      return <div className="calendar-month" data-start={month.start} data-end={month.endExclusive} key={month.start} style={{ left: position.left, width: position.width }} title={full}>
-        <span style={{ left: position.inset, width: position.available }}>{label}</span>
-      </div>;
-    })}
-    {calendar.cells.map((cell) => {
-      const position = cellPosition(cell, camera, width);
-      const label = position.available >= cell.label.length * 5.2 + 3 ? cell.label : position.available >= cell.shortLabel.length * 5.2 + 3 ? cell.shortLabel : '';
-      return <div className={`calendar-cell cell-${cell.kind}`} data-start={cell.start} data-end={cell.endExclusive} data-labelled={Boolean(label)} key={cell.start}
-        style={{ left: position.left, width: position.width }} title={`${cell.label} · ${cell.start} — ${cell.endExclusive}`}>
-        <span className="calendar-cell-label" style={{ left: position.inset, width: position.available }}>{label}{label && position.available >= 75 && <small>{cell.secondaryLabel}</small>}</span>
-      </div>;
-    })}
-    <div className="ruler-today-line" style={{ left: xForDate(today, camera) }} />
-  </div>;
+export function CalendarRuler({camera,width,calendar,today}:{readonly camera:TimelineCamera;readonly width:number;readonly calendar:CalendarGeometry;readonly today:DateOnly}) {
+ return <div className="calendar-ruler" aria-label="Календарная шкала">
+  {calendar.months.flatMap(month=>timeFragments({startDate:month.start,endDateExclusive:month.endExclusive},camera).map(f=>{
+   const p=position(f.x,f.width,width),full=`${month.label} ${month.secondaryLabel}`,short=`${month.shortLabel} ${month.secondaryLabel}`;
+   const label=p.available>=full.length*6.5+18?full:p.available>=short.length*6.5+14?short:'';
+   return <div className="calendar-month" data-start={f.startDate} data-end={f.endDateExclusive} key={`${month.start}:${f.startDate}`} style={{left:p.left,width:p.width}} title={full}><span style={{left:p.inset,width:p.available}}>{label}</span></div>;
+  }))}
+  {calendar.cells.flatMap(cell=>timeFragments({startDate:cell.start,endDateExclusive:cell.endExclusive},camera).map(f=>{
+   const p=position(f.x,f.width,width),label=p.available>=cell.label.length*5.2+3?cell.label:p.available>=cell.shortLabel.length*5.2+3?cell.shortLabel:'';
+   return <div className={`calendar-cell cell-${cell.kind}`} data-start={f.startDate} data-end={f.endDateExclusive} data-labelled={Boolean(label)} key={`${cell.start}:${f.startDate}`} style={{left:p.left,width:p.width}} title={`${cell.label} · ${f.startDate} — ${f.endDateExclusive}`}><span className="calendar-cell-label" style={{left:p.inset,width:p.available}}>{label}{label&&p.available>=75&&<small>{cell.secondaryLabel}</small>}</span></div>;
+  }))}
+  {(camera.gaps??[]).map(g=><div key={g.stageId} className="result-calendar-gap" data-stage-result-header={g.stageId} style={{left:xBefore(g.boundary,camera),width:g.width}}>Результаты<small>Без календарного времени</small></div>)}
+  <div className="ruler-today-line" style={{left:xForDate(today,camera)}} />
+ </div>;
 }
 
 export function TimeGrid({ camera, width, height, calendar, weekends }: { readonly camera: TimelineCamera; readonly width: number; readonly height: number; readonly calendar: CalendarGeometry; readonly weekends: boolean }) {
