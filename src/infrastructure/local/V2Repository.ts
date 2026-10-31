@@ -1,6 +1,10 @@
 import { Dexie } from "dexie";
 import type { Table } from "dexie";
-import { snapshotSchema, WORKSPACE_ID } from "../../domain/v2/model";
+import {
+  snapshotSchema,
+  normalizeView,
+  WORKSPACE_ID,
+} from "../../domain/v2/model";
 import type { Snapshot } from "../../domain/v2/model";
 import { viewPreferencesSchema } from "../../domain";
 import type { ViewPreferences } from "../../domain";
@@ -41,14 +45,28 @@ export class V2Repository {
   }
   async save(d: Snapshot, expected: number | null) {
     const value = snapshotSchema.parse(d);
-    await this.db.transaction("rw", this.db.documents, async () => {
-      const old = await this.load(d.project.id);
-      if (expected === null ? !!old : !old || old.project.revision !== expected)
-        throw new RevisionConflict();
-      if (value.project.revision !== (expected === null ? 0 : expected + 1))
-        throw Error("Неверная ревизия");
-      await this.db.documents.put(value);
-    });
+    await this.db.transaction(
+      "rw",
+      this.db.documents,
+      this.db.preferences,
+      async () => {
+        const old = await this.load(d.project.id);
+        if (
+          expected === null ? !!old : !old || old.project.revision !== expected
+        )
+          throw new RevisionConflict();
+        if (value.project.revision !== (expected === null ? 0 : expected + 1))
+          throw Error("Неверная ревизия");
+        await this.db.documents.put(value);
+        const key = `editor:${value.project.id}`,
+          row = await this.db.preferences.get(key);
+        if (row)
+          await this.db.preferences.put({
+            key,
+            value: normalizeView(value, viewPreferencesSchema.parse(row.value)),
+          });
+      },
+    );
   }
   async preferences() {
     return workspacePreferencesSchema.parse(
@@ -74,11 +92,21 @@ export class V2Repository {
   }
   async saveView(id: string, view: ViewPreferences) {
     if (id !== view.projectId) throw Error("Чужой вид");
-    await this.db.preferences.put({
-      key: `editor:${id}`,
-      value: viewPreferencesSchema.parse(view),
-    });
+    await this.db.transaction(
+      "rw",
+      this.db.documents,
+      this.db.preferences,
+      async () => {
+        const document = await this.load(id);
+        if (!document) throw new RevisionConflict();
+        await this.db.preferences.put({
+          key: `editor:${id}`,
+          value: normalizeView(document, viewPreferencesSchema.parse(view)),
+        });
+      },
+    );
   }
+
   async insertBatch(values: Snapshot[], preferences?: WorkspacePreferences) {
     const parsed = values.map((d) => snapshotSchema.parse(d));
     await this.db.transaction(

@@ -1,14 +1,13 @@
 import { z } from "zod";
-import {
-  snapshotSchema,
-  checkpointSchema,
-  checkpointDate,
-  displayDocument,
-} from "./model";
+import { snapshotSchema, checkpointSchema, checkpointDate } from "./model";
 import type { Snapshot } from "./model";
 import { dateOnlySchema } from "../schema";
 import { addDays, shiftInterval } from "../dates";
-import { applyTimelineCommand } from "../legacyCommands";
+import {
+  applyTimelinePlan,
+  applyStagePlan,
+  stageCommandSchemas,
+} from "./planner";
 import { processIdSchema, taskIdSchema, stageMarkerIdSchema } from "../ids";
 const targetSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("process"), id: processIdSchema }),
@@ -39,6 +38,7 @@ const timelineSchema = z.discriminatedUnion("type", [
 ]);
 const textTarget = z.enum(["project", "stage", "process", "task"]);
 export const commandSchema = z.discriminatedUnion("type", [
+  ...stageCommandSchemas,
   z.strictObject({
     type: z.literal("Rename"),
     kind: textTarget,
@@ -67,14 +67,21 @@ export const commandSchema = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("Timeline"), command: timelineSchema }),
 ]);
 export type ContentCommand = z.infer<typeof commandSchema>;
-export const envelopeSchema=z.strictObject({commandId:z.uuid(),version:z.literal(1),workspaceId:z.uuid(),projectId:z.uuid(),expectedRevision:z.number().int().nonnegative(),command:commandSchema});
-export type CommandEnvelope=z.infer<typeof envelopeSchema>;
+export const envelopeSchema = z.strictObject({
+  commandId: z.uuid(),
+  version: z.literal(1),
+  workspaceId: z.uuid(),
+  projectId: z.uuid(),
+  expectedRevision: z.number().int().nonnegative(),
+  command: commandSchema,
+});
+export type CommandEnvelope = z.infer<typeof envelopeSchema>;
 export function applyCommand(
   source: Snapshot,
   input: ContentCommand,
 ): Snapshot {
   const c = commandSchema.parse(input);
-  let d = structuredClone(source);
+  const d = structuredClone(source);
   if (c.type === "Rename" || c.type === "Describe") {
     const field = c.type === "Rename" ? "title" : "description";
     if (c.kind === "project") {
@@ -134,18 +141,7 @@ export function applyCommand(
         : x,
     );
   } else if (c.type === "Timeline") {
-    if (c.command.type === "stage")
-      throw Error("Перенос границ этапов будет доступен в V1.3B.");
-    const r = applyTimelineCommand(displayDocument(d), c.command);
-    if (!r.ok) throw Error(r.error);
-    d.processes = d.processes.map((p) => ({
-      ...p,
-      ...r.document.processes.find((x) => x.id === p.id),
-    }));
-    d.tasks = d.tasks.map((t) => ({
-      ...t,
-      ...r.document.tasks.find((x) => x.id === t.id),
-    }));
+    applyTimelinePlan(source, d, c.command);
   } else if (c.type === "ShiftProject") {
     if (c.days === 0) return source;
     d.project = {
@@ -176,7 +172,7 @@ export function applyCommand(
           : x.timing,
       revision: x.revision + 1,
     }));
-  } else {
+  } else if (c.type === "ResizeProject") {
     d.project = {
       ...d.project,
       [c.edge === "start" ? "startDate" : "endDateExclusive"]: c.date,
@@ -193,26 +189,72 @@ export function applyCommand(
           }
         : x,
     );
+  } else {
+    applyStagePlan(d, c);
   }
-  // Changes to view state and no-ops must not acquire content revisions/history.
-  const content = (v: Snapshot) =>
+  return finalize(source, d);
+}
+const collections = [
+  "stages",
+  "processes",
+  "tasks",
+  "checkpoints",
+  "results",
+] as const;
+function content(entity: object) {
+  return JSON.stringify(
+    Object.fromEntries(
+      Object.entries(entity).filter(
+        ([key]) => key !== "revision" && key !== "updatedAt",
+      ),
+    ),
+  );
+}
+function finalize(source: Snapshot, d: Snapshot): Snapshot {
+  for (const key of collections)
+    for (const entity of d[key]) {
+      const old = source[key].find((x) => x.id === entity.id);
+      entity.revision = old
+        ? old.revision + (content(old) === content(entity) ? 0 : 1)
+        : 0;
+    }
+  const withoutRevision = (v: Snapshot) =>
     JSON.stringify({
       ...v,
-      project: { ...v.project, revision: 0 },
-      processes: v.processes.map((x) => ({ ...x, revision: 0 })),
-      tasks: v.tasks.map((x) => ({ ...x, revision: 0 })),
-      stages: v.stages.map((x) => ({ ...x, revision: 0 })),
-      checkpoints: v.checkpoints.map((x) => ({ ...x, revision: 0 })),
+      project: { ...v.project, revision: 0, updatedAt: "" },
+      ...Object.fromEntries(
+        collections.map((key) => [
+          key,
+          v[key].map((x) => ({ ...x, revision: 0 })),
+        ]),
+      ),
     });
-  if (content(d) === content(source)) return source;
-  d = {
-    ...d,
-    project: { ...d.project, revision: source.project.revision + 1 },
-  };
+  if (withoutRevision(d) === withoutRevision(source)) return source;
+  d.project.revision = source.project.revision + 1;
   const result = snapshotSchema.safeParse(d);
   if (!result.success)
     throw Error(
       result.error.issues[0]?.message ?? "Изменение нарушает структуру проекта",
     );
   return result.data;
+}
+export function planCommand(source: Snapshot, command: ContentCommand) {
+  const document = applyCommand(source, command);
+  const entities = (d: Snapshot) => [
+    d.project,
+    ...d.stages,
+    ...d.lanes,
+    ...d.processes,
+    ...d.tasks,
+    ...d.checkpoints,
+    ...d.results,
+  ];
+  const before = new Map(
+      entities(source).map((e) => [e.id, JSON.stringify(e)]),
+    ),
+    after = new Map(entities(document).map((e) => [e.id, JSON.stringify(e)]));
+  const affectedIds = [...new Set([...before.keys(), ...after.keys()])].filter(
+    (id) => before.get(id) !== after.get(id),
+  );
+  return { document, affectedIds, inverse: { snapshot: source } };
 }

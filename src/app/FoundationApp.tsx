@@ -247,8 +247,8 @@ export function FoundationApp({ service }: { service: CommandService }) {
                 onRedo={() => {
                   undo(true);
                 }}
-                onCommand={(c) =>
-                  run(() => service.execute(service.envelope(active, c)))
+                onCommand={(c,revision=active.project.revision) =>
+                  run(() => service.execute({...service.envelope(active, c),expectedRevision:revision}))
                 }
               />
             ) : (

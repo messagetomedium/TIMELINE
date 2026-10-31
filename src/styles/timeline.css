@@ -143,3 +143,12 @@
 .details-inspector .checkbox-label { display: flex; align-items: flex-start; gap: 8px; margin: 14px 0; font-size: 12px; line-height: 1.5; }
 .details-inspector .checkbox-label input { margin-top: 3px; flex-shrink: 0; }
 .details-inspector input[type="date"] { display: block; width: 100%; padding: 8px; border: 1px solid #dce1d8; border-radius: 5px; font: inherit; font-size: 13px; }
+.insert-stage-button { position: absolute; top: 48px; z-index: 12; transform: translateX(-50%); width: 19px; height: 19px; padding: 0; border: 1px solid #92a49b; border-radius: 50%; background: #fff; color: #355e48; font-size: 16px; line-height: 16px; }
+.stage-affected { box-shadow: inset 0 0 0 2px #a58151; }
+.stage-actions { display: flex; flex-direction: column; gap: 10px; margin-top: 20px; border-top: 1px solid #dce1d8; padding-top: 16px; }
+.stage-actions h3 { font-size: 13px; }
+.stage-actions > button { width: 100%; text-align: left; font-size: 12px; }
+.date-command-field { display: flex; flex-direction: column; gap: 7px; font-size: 12px; }
+.date-command-field label { display: flex; flex-direction: column; gap: 5px; }
+.date-command-field button { align-self: flex-end; font-size: 12px; }
+.foundation-stage-band .stage-grip { top: 30px; }

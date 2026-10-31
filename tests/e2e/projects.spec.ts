@@ -1,5 +1,5 @@
 import { required } from "../../src/testing/required";
-import { readFile, mkdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 import {
   create,
@@ -65,6 +65,7 @@ test("cards, portfolio, back and refresh retain shared project data and view", a
   await home(page);
   await page.getByRole("button", { name: "Таймлайн", exact: true }).click();
   await expect(page.locator(".portfolio-row")).toHaveCount(2);
+  await expect(page.locator(".result-gap")).toHaveCount(0);
   await page.getByLabel("Шаг", { exact: true }).selectOption("2w");
   await saved(page);
   await page.getByRole("button", { name: "Проект: А", exact: true }).click();
@@ -274,19 +275,4 @@ test("storage failure and missing routes show errors without resetting data", as
     page.getByRole("heading", { name: "Хранилище недоступно" }),
   ).toBeVisible();
   await expect(page.getByRole("alert")).toContainText("Storage denied");
-});
-test("captures real cards and continuous portfolio without result gaps", async ({
-  page,
-}) => {
-  await create(page, "Проект 1");
-  await home(page);
-  await create(page, "Проект 2", "2026-11-09");
-  await home(page);
-  await mkdir("docs/screenshots", { recursive: true });
-  await page.screenshot({ path: "docs/screenshots/v1-3a-cards-1440.png" });
-  await page.getByRole("button", { name: "Таймлайн", exact: true }).click();
-  await saved(page);
-  await page.screenshot({ path: "docs/screenshots/v1-3a-portfolio-1440.png" });
-  expect(await page.locator(".result-gap").count()).toBe(0);
-  await expect(page.locator(".portfolio-row")).toHaveCount(2);
 });

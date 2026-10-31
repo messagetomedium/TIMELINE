@@ -165,7 +165,7 @@ export const snapshotSchema = z
         l.stageId !== p.stageId
       )
         fail(
-          "Процесс должен находиться в своём этапе и строке. Каскад доступен в V1.3B.",
+          "Процесс должен находиться в своём этапе и строке.",
         );
     }
     for (const t of d.tasks) {
@@ -280,4 +280,11 @@ export function displayDocument(d: Snapshot) {
     assignments: [],
     viewPreferences: d.viewPreferences,
   });
+}
+
+/** Remove dangling expansions while retaining independent camera/view settings. */
+export function normalizeView(document:Snapshot,view:Snapshot['viewPreferences']){
+ if(view.projectId!==document.project.id)throw Error('Вид принадлежит другому проекту');
+ const ids=new Set(document.processes.map(p=>p.id));
+ return viewPreferencesSchema.parse({...view,expandedProcessIds:view.expandedProcessIds.filter(id=>ids.has(id))});
 }
