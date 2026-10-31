@@ -1,3 +1,4 @@
+import { FolderNavigation } from "../features/navigation/FolderNavigation";
 import { CommitText } from "../features/timeline/CommitText";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { dateOnly, projectIdSchema } from "../domain";
@@ -164,25 +165,17 @@ export function FoundationApp({ service }: { service: CommandService }) {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <a className="brand" href="#/projects">
-          <span className="brand-mark">т</span>Таймлайн
-        </a>
-        <nav>
-          <button
-            className="nav-link"
-            onClick={() => {
-              location.hash = "/projects";
-            }}
-          >
-            Проекты
-          </button>
-        </nav>
-        {active && (
-          <div className="header-project">
-            <span>/</span>
-            <strong>{active.project.name}</strong>
-          </div>
-        )}
+        <FolderNavigation
+          documents={documents ?? []}
+          activeId={id ?? null}
+          home={!id}
+          onHome={() => {
+            location.hash = "/projects";
+          }}
+          onOpen={(projectId) => {
+            location.hash = `/projects/${projectId}`;
+          }}
+        />
         <span
           className="workspace-label"
           role="status"
@@ -250,6 +243,13 @@ export function FoundationApp({ service }: { service: CommandService }) {
               <FoundationTimeline
                 key={id}
                 snapshot={active}
+                inspectorCollapsed={preferences.inspectorCollapsed ?? false}
+                onToggleInspector={() => {
+                  savePreferences({
+                    ...preferences,
+                    inspectorCollapsed: !preferences.inspectorCollapsed,
+                  });
+                }}
                 view={views[id] ?? active.viewPreferences}
                 onView={saveView}
                 history={service.history(id)}

@@ -1,3 +1,5 @@
+import { WorkActions, CreateWorkForm } from "./WorkActions";
+import type { WorkKind } from "../../domain/v2/work";
 import { useRef, useState } from "react";
 import { addDays, dateOnlySchema } from "../../domain";
 import { displayDocument, checkpointDate } from "../../domain/v2/model";
@@ -44,7 +46,11 @@ export function FoundationTimeline({
   history,
   view,
   onView,
+  inspectorCollapsed,
+  onToggleInspector,
 }: {
+  inspectorCollapsed: boolean;
+  onToggleInspector: () => void;
   snapshot: Snapshot;
   onCommand: SendCommand;
   onUndo: () => void;
@@ -53,6 +59,20 @@ export function FoundationTimeline({
   view: ViewPreferences | undefined;
   onView: (id: ProjectId, v: ViewPreferences) => void;
 }) {
+  const [creating, setCreating] = useState<{
+    kind: WorkKind;
+    parentId: string;
+  } | null>(null);
+  const create = (kind: WorkKind, parent: string | null) => {
+    const process = snapshot.processes.find((p) => p.id === parent);
+    const parentId =
+      kind === "task"
+        ? process?.id
+        : special?.kind === "stage"
+          ? special.id
+          : (process?.stageId ?? snapshot.stages[0]?.id);
+    if (parentId) setCreating({ kind, parentId });
+  };
   const [special, setSpecial] = useState<Special | null>(null);
   const document = displayDocument(snapshot);
   const [inserting, setInserting] = useState<StageBoundary | null>(null);
@@ -73,6 +93,10 @@ export function FoundationTimeline({
         }}
         onCreateWork={() => Promise.resolve(null)}
         foundation={{
+          snapshot,
+          onCreate: create,
+          inspectorCollapsed,
+          onToggleInspector,
           layout: (d, expanded) => {
             const parts = snapshot.stages.map((s) => {
               const processes = d.processes.filter(
@@ -104,13 +128,15 @@ export function FoundationTimeline({
             try {
               const plan = planCommand(
                 snapshot,
-                command.type === "checkpoint"
-                  ? {
-                      type: "SetCheckpointTiming",
-                      id: command.id,
-                      timing: { anchor: "free", date: command.date },
-                    }
-                  : { type: "Timeline", command },
+                command.type === "GroupMove"
+                  ? command
+                  : command.type === "checkpoint"
+                    ? {
+                        type: "SetCheckpointTiming",
+                        id: command.id,
+                        timing: { anchor: "free", date: command.date },
+                      }
+                    : { type: "Timeline", command },
               );
               return {
                 ok: true,
@@ -127,13 +153,15 @@ export function FoundationTimeline({
           },
           onCommand: (command, revision) => {
             void onCommand(
-              command.type === "checkpoint"
-                ? {
-                    type: "SetCheckpointTiming",
-                    id: command.id,
-                    timing: { anchor: "free", date: command.date },
-                  }
-                : { type: "Timeline", command },
+              command.type === "GroupMove"
+                ? command
+                : command.type === "checkpoint"
+                  ? {
+                      type: "SetCheckpointTiming",
+                      id: command.id,
+                      timing: { anchor: "free", date: command.date },
+                    }
+                  : { type: "Timeline", command },
               revision,
             );
           },
@@ -325,12 +353,16 @@ export function FoundationTimeline({
               <span className="toolbar-separator" />
             </>
           ),
-          inspector: (selection, preview) => (
+          inspector: (selection, preview, count) => (
             <FoundationInspector
               key={currentSpecial?.id ?? selection?.id ?? "none"}
               snapshot={preview ?? snapshot}
               target={currentSpecial ?? selection}
               onCommand={onCommand}
+              count={count}
+              onCreate={(kind, parent) => {
+                create(kind, parent);
+              }}
               onResultSelect={(id) => {
                 setSpecial({ kind: "result", id });
               }}
@@ -338,6 +370,17 @@ export function FoundationTimeline({
           ),
         }}
       />
+      {creating && (
+        <CreateWorkForm
+          snapshot={snapshot}
+          kind={creating.kind}
+          parentId={creating.parentId}
+          onCommand={onCommand}
+          onClose={() => {
+            setCreating(null);
+          }}
+        />
+      )}
       {inserting && (
         <InsertStageDialog
           boundary={inserting}
@@ -355,11 +398,15 @@ function FoundationInspector({
   target,
   onCommand,
   onResultSelect,
+  onCreate,
+  count,
 }: {
   snapshot: Snapshot;
   target: Special | Selection | null;
   onCommand: SendCommand;
   onResultSelect: (id: string) => void;
+  onCreate: (kind: WorkKind, parentId: string) => void;
+  count: number;
 }) {
   const checkpoint =
     target?.kind === "checkpoint"
@@ -456,6 +503,21 @@ function FoundationInspector({
             }}
           />
         </>
+      )}
+      {count > 1 && (
+        <p className="inspector-note">
+          Выбрано работ: {count}. Групповая операция — перенос за ручку. Для
+          удаления или копирования выберите одну работу.
+        </p>
+      )}
+      {(target.kind === "process" || target.kind === "task") && count <= 1 && (
+        <WorkActions
+          snapshot={snapshot}
+          kind={target.kind}
+          id={target.id}
+          onCommand={onCommand}
+          onCreate={onCreate}
+        />
       )}
       {checkpoint && (
         <CheckpointTiming
