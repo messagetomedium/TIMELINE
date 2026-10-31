@@ -86,11 +86,15 @@ export function cleanupWork(d: Snapshot) {
     ),
   };
 }
-function limits(d: Snapshot) {
-  if (d.processes.length > 100) throw Error("Лимит: 100 процессов в проекте");
+function limits(source: Snapshot, d: Snapshot) {
+  if (d.processes.length > 100 && d.processes.length > source.processes.length)
+    throw Error("Лимит: 100 процессов в проекте");
   if (
     d.processes.some(
-      (p) => d.tasks.filter((t) => t.processId === p.id).length > 40,
+      (p) =>
+        d.tasks.filter((t) => t.processId === p.id).length > 40 &&
+        d.tasks.filter((t) => t.processId === p.id).length >
+          source.tasks.filter((t) => t.processId === p.id).length,
     )
   )
     throw Error("Лимит: 40 задач в процессе");
@@ -408,5 +412,5 @@ export function applyWork(source: Snapshot, d: Snapshot, c: WorkCommand) {
       });
     }
   }
-  limits(d);
+  limits(source, d);
 }

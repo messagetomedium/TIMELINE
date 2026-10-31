@@ -4,6 +4,7 @@ import { applyCommand } from "./commands";
 import { copySourceIds } from "./work";
 import type { GroupMove, WorkCommand } from "./work";
 import { dateOnly, laneIdSchema } from "../index";
+import { snapshotSchema } from "./model";
 import type { Snapshot } from "./model";
 import { required } from "../../testing/required";
 const fresh = () =>
@@ -369,5 +370,33 @@ it("enforces the task limit during reparenting without altering the source", () 
       destination: destination(d, ids, target.id),
     }),
   ).toThrow("40 задач");
+  expect(d).toEqual(before);
+});
+
+it("keeps oversized imported data editable and deletable while preventing further growth", () => {
+  const d = fresh(),
+    p = required(d.processes[0]),
+    t = required(d.tasks[0]);
+  for (let i = 0; i < 40; i++) {
+    const laneId = laneIdSchema.parse(crypto.randomUUID());
+    d.lanes.push({
+      workspaceId: d.project.workspaceId,
+      projectId: d.project.id,
+      id: laneId,
+      kind: "task",
+      processId: p.id,
+      sortIndex: i + 1,
+    });
+    d.tasks.push({ ...t, id: required(fresh().tasks[0]).id, laneId });
+  }
+  snapshotSchema.parse(d);
+  const before = structuredClone(d);
+  const reduced = applyCommand(d, {
+    type: "DeleteWork",
+    kind: "task",
+    id: t.id,
+  });
+  expect(reduced.tasks.length).toBe(d.tasks.length - 1);
+  expect(() => applyCommand(d, duplicate(d, "task", t.id))).toThrow("40 задач");
   expect(d).toEqual(before);
 });
