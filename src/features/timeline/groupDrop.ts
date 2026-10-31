@@ -66,7 +66,7 @@ export function groupDrop(
       drop.date < p.startDate
         ? daysBetween(drop.date, p.startDate)
         : drop.date >= p.endDateExclusive
-          ? daysBetween(p.endDateExclusive, drop.date)
+          ? daysBetween(p.endDateExclusive, drop.date) + 1
           : 0;
     const candidate = candidates
       .filter((c) => c.y === rowCandidate.y)

@@ -46,4 +46,6 @@ it("uses calendar X as well as Y to choose between sequential processes sharing 
     });
   expect(first.destination?.parentId).toBe(early.id);
   expect(second.destination?.parentId).toBe(id);
+  const boundary=groupDrop(d,displayDocument(d),layoutTimeline,expanded,{...common,date:dateOnly('2026-11-06')});
+  expect(boundary.destination?.parentId).toBe(id);
 });
