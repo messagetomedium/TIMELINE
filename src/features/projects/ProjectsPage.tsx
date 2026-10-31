@@ -1,24 +1,24 @@
 import { useRef, useState } from 'react';
 import type { ProjectDocument, ProjectId } from '../../domain';
-import type { Backup, PortfolioPreferences, WorkspacePreferences } from '../../application/workspace/model';
+import type { PortfolioPreferences, WorkspacePreferences } from '../../application/workspace/model';
 import { ProjectCardGrid } from './ProjectCardGrid';
 import type { ProjectActionProps } from './ProjectActions';
 import { PortfolioTimeline } from './PortfolioTimeline';
 import '../../styles/projects.css';
 
-interface Props extends ProjectActionProps {
+interface Props<TBackup extends { documents: readonly unknown[] }> extends ProjectActionProps {
   readonly documents: readonly ProjectDocument[]; readonly preferences: WorkspacePreferences;
   readonly onPreferences: (preferences: WorkspacePreferences) => void;
   readonly onOpen: (id: ProjectId) => void; readonly onNew: () => void;
   readonly onShift: (id: ProjectId, days: number, revision: number) => void;
   readonly onExport: () => Promise<string | null>;
-  readonly onPreviewImport: (text: string) => Promise<{ backup: Backup; collisions: number } | null>;
-  readonly onImport: (backup: Backup, copies: boolean) => Promise<boolean>;
+  readonly onPreviewImport: (text: string) => Promise<{ backup: TBackup; collisions: number } | null>;
+  readonly onImport: (backup: TBackup, copies: boolean) => Promise<boolean>;
 }
 
-export function ProjectsPage({ documents, preferences, onPreferences, onOpen, onNew, onShift, onExport, onPreviewImport, onImport, ...actions }: Props) {
+export function ProjectsPage<TBackup extends { documents: readonly unknown[] }>({ documents, preferences, onPreferences, onOpen, onNew, onShift, onExport, onPreviewImport, onImport, ...actions }: Props<TBackup>) {
   const file = useRef<HTMLInputElement>(null);
-  const [preview, setPreview] = useState<{ backup: Backup; collisions: number } | null>(null);
+  const [preview, setPreview] = useState<{ backup: TBackup; collisions: number } | null>(null);
   const [copies, setCopies] = useState(false);
   const [importing, setImporting] = useState(false);
   const changePortfolio = (portfolio: PortfolioPreferences) => { onPreferences({ ...preferences, portfolio }); };
@@ -40,7 +40,7 @@ export function ProjectsPage({ documents, preferences, onPreferences, onOpen, on
         if (selected) void selected.text().then(onPreviewImport).then((result) => { if (result) { setPreview(result); setCopies(result.collisions > 0); } });
       }} />
     </div>
-    {documents.length === 0 ? <section className="projects-empty"><h2>Проектов пока нет</h2><p>Создайте пустой проект и добавьте в него первые работы.</p><button className="primary-button" onClick={onNew}>Создать первый проект</button></section>
+    {documents.length === 0 ? <section className="projects-empty"><h2>Проектов пока нет</h2><p>Создайте проект: два этапа, четыре процесса и восемь задач без назначенных исполнителей.</p><button className="primary-button" onClick={onNew}>Создать первый проект</button></section>
       : preferences.mode === 'cards' ? <ProjectCardGrid documents={documents} onOpen={onOpen} {...actions} />
         : <PortfolioTimeline documents={documents} preferences={preferences.portfolio} onPreferences={changePortfolio} onOpen={onOpen} onShift={onShift} {...actions} />}
     {preview && <div className="modal-backdrop"><form className="workspace-dialog" role="dialog" aria-modal="true" aria-label="Импорт резервной копии" onSubmit={(event) => { event.preventDefault(); setImporting(true); void onImport(preview.backup, copies).then((ok) => { if (ok) setPreview(null); }).finally(() => { setImporting(false); }); }}>

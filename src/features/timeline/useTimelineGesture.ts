@@ -17,6 +17,7 @@ interface Gesture {
   readonly scrollTop: number;
   readonly operation: Operation | null;
   last: CommandResult | null;
+  command: TimelineCommand | null;
 }
 interface Props {
   readonly document: ProjectDocument;
@@ -26,11 +27,13 @@ interface Props {
   readonly body: RefObject<HTMLDivElement | null>;
   readonly setCamera: Dispatch<SetStateAction<TimelineCamera>>;
   readonly onCommit: (document: ProjectDocument) => void;
+  readonly evaluate?: ((document: ProjectDocument, command: TimelineCommand) => CommandResult) | undefined;
+  readonly onCommand?: ((command: TimelineCommand) => void) | undefined;
   readonly onError: (message: string) => void;
   readonly onStageClick: (id: StageMarkerId) => void;
 }
 
-export function useTimelineGesture({ document, camera, step, surface, body, setCamera, onCommit, onError, onStageClick }: Props) {
+export function useTimelineGesture({ document, camera, step, surface, body, setCamera, onCommit, onError, onStageClick, evaluate = applyTimelineCommand, onCommand }: Props) {
   const gesture = useRef<Gesture | null>(null);
   const [preview, setPreview] = useState<ProjectDocument | null>(null);
   const [active, setActive] = useState<'pan' | 'edit' | null>(null);
@@ -57,7 +60,7 @@ export function useTimelineGesture({ document, camera, step, surface, body, setC
   const begin = (event: PointerEvent, operation: Operation | null) => {
     if (gesture.current || (operation && event.button !== 0)) return;
     event.preventDefault(); event.stopPropagation(); onError('');
-    gesture.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, camera, document, scrollTop: body.current?.scrollTop ?? 0, operation, last: null };
+    gesture.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, camera, document, scrollTop: body.current?.scrollTop ?? 0, operation, last: null, command: null };
     surface.current?.setPointerCapture(event.pointerId);
     setActive(operation ? 'edit' : 'pan');
   };
@@ -89,7 +92,8 @@ export function useTimelineGesture({ document, camera, step, surface, body, setC
         command = { type: 'resize', target: operation.target, edge: operation.action, date: snapDate(addDays(edge, days), step) };
       }
     }
-    current.last = applyTimelineCommand(current.document, command);
+    current.command = command;
+    current.last = evaluate(current.document, command);
     setPreview(current.last.ok ? current.last.document : null);
     setInvalid(!current.last.ok);
     onError(current.last.ok ? '' : current.last.error);
@@ -99,7 +103,7 @@ export function useTimelineGesture({ document, camera, step, surface, body, setC
     const current = gesture.current;
     if (!current || current.pointerId !== event.pointerId) return;
     gesture.current = null;
-    if (current.last?.ok) onCommit(current.last.document);
+    if (current.last?.ok) { if (onCommand && current.command) onCommand(current.command); else onCommit(current.last.document); }
     if (!current.last && current.operation?.kind === 'stage') onStageClick(current.operation.id);
     setPreview(null); setActive(null); setInvalid(false);
     if (surface.current?.hasPointerCapture(event.pointerId)) surface.current.releasePointerCapture(event.pointerId);
