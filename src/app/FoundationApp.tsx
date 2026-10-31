@@ -1,3 +1,4 @@
+import { CommitText } from "../features/timeline/CommitText";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { dateOnly, projectIdSchema } from "../domain";
 import type { ProjectId, ViewPreferences } from "../domain";
@@ -35,17 +36,20 @@ export function FoundationApp({ service }: { service: CommandService }) {
     [views, setViews] = useState<Record<string, ViewPreferences>>({});
   const [id, setId] = useState(selectedId),
     [error, setError] = useState(""),
+    [historyIssues, setHistoryIssues] = useState<string[]>([]),
     [legacy, setLegacy] = useState(false),
     [busy, setBusy] = useState(false),
     [pending, setPending] = useState(0);
   const [dialog, setDialog] = useState<"new" | Snapshot | null>(null);
-  const writing = useRef(false),
+  const writing = useRef(0),
+    operations = useRef(Promise.resolve()),
     queue = useRef(Promise.resolve());
   const refresh = useCallback(async () => {
     const s = await service.snapshot();
     setDocuments(s.documents);
     setPreferences(s.preferences);
     setViews(s.views);
+    setHistoryIssues(s.historyIssues);
   }, [service]);
   const report = (e: unknown) => {
     setError(
@@ -64,24 +68,27 @@ export function FoundationApp({ service }: { service: CommandService }) {
     };
   }, [refresh]);
   const run = useCallback(
-    async (operation: () => Promise<unknown>) => {
-      if (writing.current) return false;
-      writing.current = true;
+    (operation: () => Promise<unknown>) => {
+      writing.current += 1;
       setBusy(true);
-      setError("");
-      try {
-        await queue.current;
-        await operation();
-        await refresh();
-        return true;
-      } catch (e) {
-        report(e);
-        await refresh().catch(report);
-        return false;
-      } finally {
-        writing.current = false;
-        setBusy(false);
-      }
+      const result = operations.current.then(async () => {
+        setError("");
+        try {
+          await queue.current;
+          await operation();
+          await refresh();
+          return true;
+        } catch (e) {
+          report(e);
+          await refresh().catch(report);
+          return false;
+        } finally {
+          writing.current -= 1;
+          setBusy(writing.current > 0);
+        }
+      });
+      operations.current = result.then(() => undefined);
+      return result;
     },
     [refresh],
   );
@@ -218,6 +225,11 @@ export function FoundationApp({ service }: { service: CommandService }) {
           </button>
         </div>
       )}
+      {historyIssues.map((issue) => (
+        <div className="workspace-error" role="alert" key={issue}>
+          {issue}
+        </div>
+      ))}
       {!documents ? (
         <main className="workspace-loading">
           <h1>{error ? "Хранилище недоступно" : "Открываем проекты…"}</h1>
@@ -232,7 +244,7 @@ export function FoundationApp({ service }: { service: CommandService }) {
           )}
         </main>
       ) : (
-        <div className="app-content" inert={busy}>
+        <div className="app-content" aria-busy={busy}>
           {id ? (
             active ? (
               <FoundationTimeline
@@ -247,8 +259,15 @@ export function FoundationApp({ service }: { service: CommandService }) {
                 onRedo={() => {
                   undo(true);
                 }}
-                onCommand={(c,revision=active.project.revision) =>
-                  run(() => service.execute({...service.envelope(active, c),expectedRevision:revision}))
+                onCommand={(c, revision) =>
+                  run(() =>
+                    revision === undefined
+                      ? service.executeLocal(service.envelope(active, c))
+                      : service.execute({
+                          ...service.envelope(active, c),
+                          expectedRevision: revision,
+                        }),
+                  )
                 }
               />
             ) : (
@@ -294,49 +313,74 @@ export function FoundationApp({ service }: { service: CommandService }) {
           )}
         </div>
       )}
-      {dialog && (
+      {dialog && dialog !== "new" && (
+        <section className="modal-backdrop">
+          <section
+            className="workspace-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Редактирование проекта"
+          >
+            <h2>Редактирование проекта</h2>
+            {(["name", "description"] as const).map((field) => {
+              const d =
+                documents?.find((d) => d.project.id === dialog.project.id) ??
+                dialog;
+              return (
+                <label key={field}>
+                  {field === "name" ? "Название проекта" : "Описание"}
+                  <CommitText
+                    key={d.project[field] ?? ""}
+                    label={field === "name" ? "Название проекта" : "Описание"}
+                    value={d.project[field] ?? ""}
+                    multiline={field === "description"}
+                    onCommit={(value) => {
+                      void run(() =>
+                        service.executeLocal(
+                          service.envelope(d, {
+                            type: field === "name" ? "Rename" : "Describe",
+                            kind: "project",
+                            id: d.project.id,
+                            value,
+                          }),
+                        ),
+                      );
+                    }}
+                  />
+                </label>
+              );
+            })}
+            <button
+              className="primary-button"
+              onClick={() => {
+                setDialog(null);
+              }}
+            >
+              Закрыть
+            </button>
+          </section>
+        </section>
+      )}
+      {dialog === "new" && (
         <CreateDialog
-          key={typeof dialog === "string" ? dialog : dialog.project.id}
-          source={dialog === "new" ? null : dialog}
+          key="new"
+          source={null}
           busy={busy}
           onClose={() => {
             setDialog(null);
           }}
           onSave={async (name, description, start) => {
-            if (dialog === "new") {
-              let created: ProjectId | undefined;
-              const ok = await run(async () => {
-                created = await service.create({
-                  type: "CreateProject",
-                  name,
-                  description,
-                  startDate: start,
-                });
+            let created: ProjectId | undefined;
+            const ok = await run(async () => {
+              created = await service.create({
+                type: "CreateProject",
+                name,
+                description,
+                startDate: start,
               });
-              if (ok && created) location.hash = `/projects/${created}`;
-              return ok;
-            }
-            return run(async () => {
-              if (name !== dialog.project.name)
-                await service.execute(
-                  service.envelope(dialog, {
-                    type: "Rename",
-                    kind: "project",
-                    id: dialog.project.id,
-                    value: name,
-                  }),
-                );
-              const current = await service.repository.load(dialog.project.id);
-              if (current && description !== current.project.description)
-                await service.execute(
-                  service.envelope(current, {
-                    type: "Describe",
-                    kind: "project",
-                    id: current.project.id,
-                    value: description,
-                  }),
-                );
             });
+            if (ok && created) location.hash = `/projects/${created}`;
+            return ok;
           }}
         />
       )}
@@ -419,8 +463,8 @@ function CreateDialog({
           </label>
         )}
         <p className="dialog-note">
-          Нейтральный шаблон · 14 дней · 2 этапа · 4 процесса · 8 задач ·
-          один финальный дедлайн. Без исполнителей.
+          Нейтральный шаблон · 14 дней · 2 этапа · 4 процесса · 8 задач · один
+          финальный дедлайн. Без исполнителей.
         </p>
         <div className="dialog-footer">
           <button

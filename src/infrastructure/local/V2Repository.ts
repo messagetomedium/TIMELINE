@@ -1,3 +1,5 @@
+import type { StoredHistory } from "../../application/v2/history";
+import { historyKey } from "../../application/v2/history";
 import { Dexie } from "dexie";
 import type { Table } from "dexie";
 import {
@@ -15,6 +17,7 @@ import {
 } from "../../application/workspace/model";
 import type { WorkspacePreferences } from "../../application/workspace/model";
 export class V2Database extends Dexie {
+  history!: Table<StoredHistory, string>;
   documents!: Table<Snapshot, string>;
   preferences!: Table<{ key: string; value: unknown }, string>;
   constructor(name = "timeline-workspace-v2") {
@@ -23,12 +26,45 @@ export class V2Database extends Dexie {
       documents: "&project.id,project.updatedAt",
       preferences: "&key",
     });
+    this.version(3).stores({ history: "&key" });
   }
 }
 export class V2Repository {
   readonly db: V2Database;
   constructor(db = new V2Database()) {
     this.db = db;
+  }
+  async loadHistory(id: string) {
+    return (await this.db.history.get(historyKey(id))) ?? null;
+  }
+  async commit(
+    d: Snapshot,
+    expected: number,
+    history: StoredHistory,
+    expectedHistoryToken: string | null,
+    archiveOld: boolean,
+  ) {
+    await this.db.transaction(
+      "rw",
+      this.db.documents,
+      this.db.preferences,
+      this.db.history,
+      async () => {
+        const old = await this.loadHistory(d.project.id);
+        if (
+          (old?.token ?? null) !== expectedHistoryToken ||
+          history.key !== historyKey(d.project.id)
+        )
+          throw new RevisionConflict();
+        if (archiveOld && old)
+          await this.db.history.add({
+            ...old,
+            key: `archive:${d.project.id}:${history.token}`,
+          });
+        await this.save(d, expected);
+        await this.db.history.put(history);
+      },
+    );
   }
   async all() {
     return (await this.db.documents.toArray())

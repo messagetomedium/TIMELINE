@@ -2,23 +2,21 @@ import { addDays, addMonths, dateOnly, daysBetween } from './dates';
 import type { DateOnly, DateInterval } from './dates';
 import type { GridStep } from './schema';
 
-export interface TimelineCamera {
-  readonly originDate: DateOnly;
-  readonly pxPerDay: number;
-  readonly panX: number;
-}
+import { xAfter, xBefore, anchorPosition, xForPosition, calendarDateAtX } from './SegmentAxis';
+import type { AxisCamera } from './SegmentAxis';
+export type TimelineCamera = AxisCamera;
 
 export const WORK_ZOOM = 14;
 
 /** Coordinates are relative to the time viewport; the fixed gutter is never added. */
 export function cameraForFocusDate(camera: TimelineCamera, date: DateOnly, viewportWidth: number, focusRatio = 0.5, zoom = camera.pxPerDay): TimelineCamera {
-  return { ...camera, pxPerDay: zoom, panX: viewportWidth * focusRatio - daysBetween(camera.originDate, date) * zoom };
+  return { ...camera, pxPerDay: zoom, panX: viewportWidth * focusRatio - xAfter(date, { ...camera, pxPerDay: zoom, panX: 0 }) };
 }
 
 /** Explicit overview only. Window resizing must not call this function. */
 export function cameraForFitRange(camera: TimelineCamera, range: DateInterval, viewportWidth: number, padding = 24): TimelineCamera {
-  const zoom = Math.max(Number.EPSILON, Math.min(48, (viewportWidth - padding * 2) / daysBetween(range.startDate, range.endDateExclusive)));
-  return { ...camera, pxPerDay: zoom, panX: padding - daysBetween(camera.originDate, range.startDate) * zoom };
+  const zoom = Math.max(Number.EPSILON, Math.min(48, (Math.max(1, viewportWidth - padding * 2 - (camera.gaps ?? []).filter(g => g.boundary >= range.startDate && g.boundary <= range.endDateExclusive).reduce((n,g) => n + g.width,0))) / daysBetween(range.startDate, range.endDateExclusive)));
+  return { ...camera, pxPerDay: zoom, panX: padding - xAfter(range.startDate, {...camera, pxPerDay: zoom, panX:0}) };
 }
 
 export function nextGridDate(date: DateOnly, step: GridStep): DateOnly {
@@ -26,22 +24,23 @@ export function nextGridDate(date: DateOnly, step: GridStep): DateOnly {
 }
 
 export function xForDate(date: DateOnly, camera: TimelineCamera): number {
-  return camera.panX + daysBetween(camera.originDate, date) * camera.pxPerDay;
+  return xAfter(date, camera);
 }
 
 /** Returns the calendar day containing the pixel, including negative positions. */
 export function dateAtX(x: number, camera: TimelineCamera): DateOnly {
   // Stabilize exact calendar boundaries against floating-point round-off.
-  return addDays(camera.originDate, Math.floor((x - camera.panX) / camera.pxPerDay + 1e-9));
+  return calendarDateAtX(x, camera);
 }
 
 export function widthForInterval(value: DateInterval, camera: TimelineCamera): number {
-  return daysBetween(value.startDate, value.endDateExclusive) * camera.pxPerDay;
+  return xBefore(value.endDateExclusive, camera) - xAfter(value.startDate, camera);
 }
 
 export function zoomCamera(camera: TimelineCamera, scale: number, focusX: number): TimelineCamera {
   const pxPerDay = Math.max(1.5, Math.min(48, camera.pxPerDay * scale));
-  return { ...camera, pxPerDay, panX: focusX - (focusX - camera.panX) * pxPerDay / camera.pxPerDay };
+  const next = { ...camera, pxPerDay, panX: 0 };
+  return { ...next, panX: focusX - xForPosition(anchorPosition(focusX,camera),next) };
 }
 
 export function getVisibleDateRange(width: number, camera: TimelineCamera): DateInterval {

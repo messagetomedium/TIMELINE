@@ -257,6 +257,7 @@ function removeContents(d: Snapshot, id: string) {
     l.kind === "process" ? l.stageId !== id : !ids.has(l.processId),
   );
   d.results = d.results.filter((r) => r.stageId !== id);
+  d.resultPlacements = d.resultPlacements.filter(p=>d.results.some(r=>r.id===p.resultId));
 }
 export function applyStagePlan(d: Snapshot, c: StageCommand) {
   const stages = sortedStages(d);

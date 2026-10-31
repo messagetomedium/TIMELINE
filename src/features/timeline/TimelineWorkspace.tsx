@@ -3,7 +3,9 @@ import type { PointerEvent } from 'react';
 import type { Snapshot } from '../../domain/v2/model';
 import type { PreviewResult } from './useTimelineGesture';
 import type { ReactNode } from 'react';
-import type { TimelineCommand } from '../../application/timelineCommands';
+import type { GestureCommand } from '../../domain/v2/gesture';
+import { withGaps } from '../../domain/SegmentAxis';
+import type { ResultGap } from '../../domain/SegmentAxis';
 import { dateOnlySchema, gridStepSchema, daysBetween } from '../../domain';
 import type { GridStep, ProcessId, ProjectDocument, ProjectId, StageMarkerId, ViewPreferences } from '../../domain';
 import { cameraForFitRange, cameraForFocusDate, getVisibleDateRange, widthForInterval, WORK_ZOOM, xForDate, zoomCamera } from '../../domain/timeline';
@@ -25,13 +27,17 @@ import '../../styles/timeline.css';
 
 export interface FoundationUI {
   layout: typeof layoutTimeline;
-  evaluate: (document: ProjectDocument, command: TimelineCommand) => PreviewResult;
-  onCommand: (command: TimelineCommand, revision: number) => void;
+  evaluate: (document: ProjectDocument, command: GestureCommand) => PreviewResult;
+  onCommand: (command: GestureCommand, revision: number) => void;
   onSelect: () => void;
   onStageSelect: (id: StageMarkerId) => void;
   inspector: (selection: Selection | null, scene: Snapshot | undefined) => ReactNode;
   stages: (camera: TimelineCamera, width: number, scene: Snapshot | undefined, start: (event: PointerEvent, id: StageMarkerId) => void) => ReactNode;
-  checkpoints: (camera: TimelineCamera, scene: Snapshot | undefined) => ReactNode;
+  checkpoints: (camera: TimelineCamera, scene: Snapshot | undefined, start:(e:PointerEvent,id:string,date:import('../../domain').DateOnly)=>void) => ReactNode;
+  gaps: (scene:Snapshot|undefined)=>readonly ResultGap[];
+  results: (camera:TimelineCamera,scene:Snapshot|undefined,layout:ReturnType<typeof layoutTimeline>)=>ReactNode;
+  resultsHeight: (scene:Snapshot|undefined,layout:ReturnType<typeof layoutTimeline>)=>number;
+  onRename: (target:Selection,title:string)=>void;
   toolbar: ReactNode;
 }
 interface Props {
@@ -51,7 +57,9 @@ export function TimelineWorkspace({ document, onCommit, initialView, onViewChang
   const today = useLocalToday();
   const initialFocus = today >= document.project.startDate && today < document.project.endDateExclusive ? today : document.project.startDate;
   const [width, setWidth] = useState(960);
-  const [camera, setCamera] = useState<TimelineCamera>(() => initialView ? { originDate: document.project.startDate, pxPerDay: initialView.zoomPxPerDay, panX: initialView.cameraX } : cameraForFocusDate({ originDate: document.project.startDate, pxPerDay: WORK_ZOOM, panX: 0 }, initialFocus, 960, 0.32));
+  const [storedCamera, setCamera] = useState<TimelineCamera>(() => initialView ? { originDate: document.project.startDate, pxPerDay: initialView.zoomPxPerDay, panX: initialView.cameraX } : cameraForFocusDate({ originDate: document.project.startDate, pxPerDay: WORK_ZOOM, panX: 0 }, initialFocus, 960, 0.32));
+  const [showResults,setShowResults] = useState(initialView?.showResults ?? false);
+  const camera:TimelineCamera={...storedCamera,gaps:showResults?foundation?.gaps(undefined)??[]:[]};
   const [step, setStep] = useState<GridStep>(initialView?.gridStep ?? '1w');
   const [weekends, setWeekends] = useState(initialView?.showWeekends ?? true);
   const [expanded, setExpanded] = useState<ReadonlySet<ProcessId>>(() => new Set(initialView?.expandedProcessIds ?? document.viewPreferences.expandedProcessIds));
@@ -66,8 +74,9 @@ export function TimelineWorkspace({ document, onCommit, initialView, onViewChang
   const gesture = useTimelineGesture({ document, camera, step, surface, body, setCamera, onCommit, onError: setError, onStageClick: foundation?.onStageSelect ?? setEditingStage, evaluate: foundation?.evaluate, onCommand: foundation?.onCommand });
   const sceneDocument = gesture.preview ?? document;
   const layout = (foundation?.layout ?? layoutTimeline)(sceneDocument, expanded);
-  const bodyHeight = Math.max(460, layout.height);
-  const calendar = getCalendarGeometry(getVisibleDateRange(width, camera), step);
+  const sceneCamera:TimelineCamera={...camera,gaps:showResults?foundation?.gaps(gesture.snapshot)??[]:[]};
+  const bodyHeight = Math.max(460, layout.height,showResults?foundation?.resultsHeight(gesture.snapshot,layout)??0:0);
+  const calendar = getCalendarGeometry(getVisibleDateRange(width, sceneCamera), step);
   const activeStage = sceneDocument.stageMarkers.find((stage) => stage.id === editingStage);
 
   useEffect(() => {
@@ -92,9 +101,9 @@ export function TimelineWorkspace({ document, onCommit, initialView, onViewChang
     const validIds = new Set(processKeys.split(','));
     if (viewReady && !gesture.active) onViewChange(document.project.id, {
       projectId: document.project.id, gridStep: step, zoomPxPerDay: camera.pxPerDay, cameraX: camera.panX + daysBetween(camera.originDate, document.project.startDate) * camera.pxPerDay, cameraY: scrollY,
-      showWeekends: weekends, expandedProcessIds: [...expanded].filter(id => validIds.has(id)), ...retainedView,
+      showWeekends: weekends, showResults, expandedProcessIds: [...expanded].filter(id => validIds.has(id)), ...retainedView,
     });
-  }, [viewReady, gesture.active, document.project.id, document.project.startDate, processKeys, step, camera, scrollY, weekends, expanded, retainedView, onViewChange]);
+  }, [viewReady, gesture.active, document.project.id, document.project.startDate, processKeys, step, camera.originDate, camera.panX, camera.pxPerDay, scrollY, weekends, showResults, expanded, retainedView, onViewChange]);
 
   const select = (target: Selection) => {
     setSelection(target); foundation?.onSelect();
@@ -104,8 +113,9 @@ export function TimelineWorkspace({ document, onCommit, initialView, onViewChang
     setExpanded((previous) => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   };
   const rename = (target: Selection, title: string) => {
-    const result = (foundation?.evaluate ?? applyTimelineCommand)(document, { type: 'rename', target, title });
-    if (result.ok) { if (foundation) foundation.onCommand({ type: 'rename', target, title }, document.project.revision); else onCommit(result.document); setError(''); } else setError(result.error);
+    if(foundation) {foundation.onRename(target,title);return;}
+    const result = applyTimelineCommand(document, { type: 'rename', target, title });
+    if (result.ok) { onCommit(result.document); setError(''); } else setError(result.error);
   };
   const startBar: typeof gesture.startBar = (event, target, action) => { if (event.button === 0) select(target); setEditingStage(null); gesture.startBar(event, target, action); };
   const applyStageDate = (value: string): string | null => {
@@ -123,50 +133,52 @@ export function TimelineWorkspace({ document, onCommit, initialView, onViewChang
     <div className={`timeline-surface ${gesture.active ? `gesture-${gesture.active}` : ''} ${gesture.invalid ? 'invalid-gesture' : ''}`} ref={surface}
       onPointerDown={gesture.startPan} onPointerMove={gesture.onPointerMove} onPointerUp={gesture.onPointerUp} onPointerCancel={gesture.onPointerCancel} onLostPointerCapture={gesture.onLostPointerCapture}>
       <div className="calendar-row"><div className="calendar-gutter section-gutter" data-interactive><strong>Календарь</strong><span>{visibleYears(calendar.range)}</span></div>
-        <div className="calendar-time" ref={timeViewport}><CalendarRuler camera={camera} width={width} calendar={calendar} today={today} /></div>
+        <div className="calendar-time" ref={timeViewport}><CalendarRuler camera={sceneCamera} width={width} calendar={calendar} today={today} /></div>
       </div>
       <div className="stage-row"><div className="section-gutter stage-gutter" data-interactive>Этапы</div>
-        {foundation ? foundation.stages(camera, width, gesture.snapshot, gesture.startStage) : <StageBand document={sceneDocument} camera={camera} width={width} calendar={calendar} weekends={weekends} today={today} onStart={gesture.startStage} onEdit={setEditingStage} />}
+        {foundation ? foundation.stages(sceneCamera, width, gesture.snapshot, gesture.startStage) : <StageBand document={sceneDocument} camera={sceneCamera} width={width} calendar={calendar} weekends={weekends} today={today} onStart={gesture.startStage} onEdit={setEditingStage} />}
       </div>
       <div className="timeline-body" ref={body} aria-label="Производственный план" onScroll={(event) => { setScrollY(event.currentTarget.scrollTop); }}>
         <div className="timeline-body-layout" style={{ height: bodyHeight }}>
         <div className="section-gutter production-gutter" data-interactive><div><strong>Процессы</strong><small>{document.processes.length} процессов · {document.tasks.length} задачи</small>{!foundation && <button className="add-work-button" onClick={() => { setCreating('process'); }}>+ Процесс</button>}{!foundation && activeProcess && <button className="add-work-button" onClick={() => { setCreating('task'); }}>+ Задача</button>}</div></div>
         <div className="timeline-canvas" style={{ height: bodyHeight }}>
-          <TimeGrid camera={camera} width={width} height={bodyHeight} calendar={calendar} weekends={weekends} />
+          {showResults && foundation?.results(sceneCamera,gesture.snapshot,layout)}
+          <TimeGrid camera={sceneCamera} width={width} height={bodyHeight} calendar={calendar} weekends={weekends} />
           {document.processes.length === 0 && <div className="empty-editor-note" data-interactive><h2>Чистый лист</h2><p>{foundation ? 'Выберите этап, чтобы настроить план.' : 'Календарь готов. Добавьте первый процесс кнопкой «+ Процесс» слева.'}</p></div>}
           {layout.rows.map((row) => <div key={`${row.id}:${row.processId ?? ''}`} className="lane-divider" style={{ top: row.y + 30 }} />)}
           {layout.groups.map((group) => {
             const process = sceneDocument.processes.find((item) => item.id === group.processId);
-            return process ? <div className="process-container" key={group.processId} style={{ left: xForDate(process.startDate, camera), width: widthForInterval(process, camera), top: group.y - 3, height: group.height, borderColor: `${process.color}55`, backgroundColor: `${process.color}09` }} /> : null;
+            return process ? <div className="process-container" key={group.processId} style={{ left: xForDate(process.startDate, sceneCamera), width: widthForInterval(process, sceneCamera), top: group.y - 3, height: group.height, borderColor: `${process.color}55`, backgroundColor: `${process.color}09` }} /> : null;
           })}
-          <DateLines document={sceneDocument} camera={camera} today={today} height={bodyHeight} />
-          {foundation?.checkpoints(camera, gesture.snapshot)}
+          <DateLines document={sceneDocument} camera={sceneCamera} today={today} height={bodyHeight} />
+          {foundation?.checkpoints(sceneCamera, gesture.snapshot, gesture.startCheckpoint)}
           {layout.rows.flatMap((row) => {
-            if (row.kind === 'process') return sceneDocument.processes.filter((item) => item.laneId === row.id).map((process) => <TimelineBar key={process.id} item={process} target={{ kind: 'process', id: process.id }} camera={camera} viewportWidth={width} y={row.y} color={process.color}
+            if (row.kind === 'process') return sceneDocument.processes.filter((item) => item.laneId === row.id).map((process) => <TimelineBar key={process.id} item={process} target={{ kind: 'process', id: process.id }} camera={sceneCamera} viewportWidth={width} y={row.y} color={process.color}
               selected={selection?.id === process.id} highlighted={hovered === process.id || gesture.affectedIds.includes(process.id)} expanded={expanded.has(process.id)} toggle={() => { toggle(process.id); }} onSelect={select} onRename={rename} onHover={setHovered} onGesture={startBar} />);
             return sceneDocument.tasks.filter((item) => item.laneId === row.id).map((task) => {
               const process = sceneDocument.processes.find((item) => item.id === task.processId);
-              return <TimelineBar key={task.id} item={task} target={{ kind: 'task', id: task.id }} camera={camera} viewportWidth={width} y={row.y} color={process?.color ?? '#888888'}
+              return <TimelineBar key={task.id} item={task} target={{ kind: 'task', id: task.id }} camera={sceneCamera} viewportWidth={width} y={row.y} color={process?.color ?? '#888888'}
                 selected={selection?.id === task.id} highlighted={hovered === task.id || gesture.affectedIds.includes(task.id)} expanded={false} toggle={undefined} onSelect={select} onRename={rename} onHover={setHovered} onGesture={startBar} />;
             });
           })}
         </div>
         </div>
       </div>
-      <PerformersSection document={sceneDocument} camera={camera} width={width} calendar={calendar} weekends={weekends} today={today} hovered={hovered} onHover={setHovered} />
+      <PerformersSection document={sceneDocument} camera={sceneCamera} width={width} calendar={calendar} weekends={weekends} today={today} hovered={hovered} onHover={setHovered} />
       <div className="toolbar-dock" data-interactive>
         <div className="floating-toolbar" role="toolbar" aria-label="Вид таймлайна">
           {foundation?.toolbar}
-          <button aria-label="Уменьшить масштаб" onClick={() => { setCamera((previous) => zoomCamera(previous, 1 / 1.25, width / 2)); }}>−</button>
+          {foundation && <button className="navigation-button" aria-pressed={showResults} onClick={()=>{setCamera(withGaps(camera,showResults?[]:foundation.gaps(undefined),width/2));setShowResults(!showResults);}}>Результаты</button>}
+          <button aria-label="Уменьшить масштаб" onClick={() => { setCamera((previous) => zoomCamera({...previous,gaps:camera.gaps??[]}, 1 / 1.25, width / 2)); }}>−</button>
           <output aria-label="Масштаб">{Math.round(camera.pxPerDay * 100 / WORK_ZOOM)}%</output>
-          <button aria-label="Увеличить масштаб" onClick={() => { setCamera((previous) => zoomCamera(previous, 1.25, width / 2)); }}>+</button>
+          <button aria-label="Увеличить масштаб" onClick={() => { setCamera((previous) => zoomCamera({...previous,gaps:camera.gaps??[]}, 1.25, width / 2)); }}>+</button>
           <span className="toolbar-separator" />
           <label htmlFor="grid-step">Шаг</label><select id="grid-step" value={step} onChange={(event) => { setStep(gridStepSchema.parse(event.target.value)); }}>
             <option value="1d">1 день</option><option value="2d">2 дня</option><option value="3d">3 дня</option><option value="1w">Неделя</option><option value="2w">2 недели</option><option value="1mo">Месяц</option>
           </select>
           <span className="toolbar-separator" /><button className="weekend-button" aria-pressed={weekends} onClick={() => { setWeekends((previous) => !previous); }}><i />Выходные</button>
-          <span className="toolbar-separator" /><button className="navigation-button" onClick={() => { setCamera((previous) => cameraForFocusDate(previous, today, width, 0.5, Math.max(WORK_ZOOM, previous.pxPerDay))); }}>Сегодня</button>
-          <button className="navigation-button" onClick={() => { setCamera((previous) => cameraForFitRange(previous, scheduleRange(document), width)); }}>Весь проект</button>
+          <span className="toolbar-separator" /><button className="navigation-button" onClick={() => { setCamera((previous) => cameraForFocusDate({...previous,gaps:camera.gaps??[]}, today, width, 0.5, Math.max(WORK_ZOOM, previous.pxPerDay))); }}>Сегодня</button>
+          <button className="navigation-button" onClick={() => { setCamera((previous) => cameraForFitRange({...previous,gaps:camera.gaps??[]}, scheduleRange(document), width)); }}>Весь проект</button>
         </div>
         <span className="gesture-hint">Фон — панорама · ⠿ — перенос · Esc — отмена</span>
       </div>
