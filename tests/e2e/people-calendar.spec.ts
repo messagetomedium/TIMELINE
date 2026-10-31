@@ -381,6 +381,9 @@ test("people autocomplete, role-only assignments and shared occupancy survive re
   await expect(rows.locator("[data-overlap=true]").first()).toBeVisible();
   const segment = rows.locator(".performer-segment").first(),
     state = await current(page);
+  await segment.hover();
+  await expect(entity(page, p.id)).toHaveClass(/highlighted/);
+  await expect(entity(page, t.id)).toHaveClass(/highlighted/);
   await drag(page, segment, 50);
   await saved(page);
   expect(await current(page)).toEqual(state);

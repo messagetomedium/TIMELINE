@@ -34,6 +34,7 @@ import '../../styles/timeline.css';
 
 export interface FoundationUI {
   snapshot:Snapshot;
+  hoverIds?:(hovered:string|null)=>readonly string[];
   range:()=>import('../../domain').DateInterval;
   area:(scene:Snapshot|undefined)=>CalendarArea;
   stageHeight:(camera:TimelineCamera,width:number,scene:Snapshot|undefined)=>number;
@@ -87,6 +88,7 @@ export function TimelineWorkspace({ document, onCommit, initialView, onViewChang
   const validMulti=multi?{...multi,ids:multi.ids.filter(id=>(multi.kind==='process'?document.processes:document.tasks).some(x=>x.id===id))}:null;
   const [hovered, setHovered] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const hoverIds=new Set([hovered,...(foundation?.hoverIds?.(hovered)??[])]);
   const [editingStage, setEditingStage] = useState<StageMarkerId | null>(null);
   const gesture = useTimelineGesture({ document, camera, step, surface, body, setCamera, onCommit, onError: setError, onStageClick: foundation?.onStageSelect ?? setEditingStage, evaluate: foundation?.evaluate, onCommand: foundation ? (command,revision)=>{if(command.type==='GroupMove'&&command.kind==='task'&&command.destination)setExpanded(old=>new Set([...old,processIdSchema.parse(command.destination?.parentId)]));foundation.onCommand(command,revision);} : undefined,
     stack:foundation?(d,drop)=>groupDrop(foundation.snapshot,d,foundation.layout,expanded,drop):undefined });
@@ -177,11 +179,11 @@ export function TimelineWorkspace({ document, onCommit, initialView, onViewChang
           {foundation?.checkpoints(sceneCamera, gesture.snapshot, gesture.startCheckpoint)}
           {layout.rows.flatMap((row) => {
             if (row.kind === 'process') return sceneDocument.processes.filter((item) => item.laneId === row.id).map((process) => <TimelineBar key={process.id} geometry={barGeometry({id:process.id,startDate:process.startDate,endDateExclusive:process.endDateExclusive,y:row.y},sceneBars,sceneCamera)} item={process} target={{ kind: 'process', id: process.id }} camera={sceneCamera} viewportWidth={width} y={row.y} color={process.color}
-              selected={validMulti?.kind==='process'?validMulti.ids.includes(process.id):selection?.id===process.id} highlighted={hovered === process.id || gesture.affectedIds.includes(process.id)} expanded={sceneExpanded.has(process.id)} toggle={() => { toggle(process.id); }} onSelect={select} onRename={rename} onHover={setHovered} onGesture={startBar} />);
+              selected={validMulti?.kind==='process'?validMulti.ids.includes(process.id):selection?.id===process.id} highlighted={hoverIds.has(process.id) || gesture.affectedIds.includes(process.id)} expanded={sceneExpanded.has(process.id)} toggle={() => { toggle(process.id); }} onSelect={select} onRename={rename} onHover={setHovered} onGesture={startBar} />);
             return sceneDocument.tasks.filter((item) => item.laneId === row.id).map((task) => {
               const process = sceneDocument.processes.find((item) => item.id === task.processId);
               return <TimelineBar key={task.id} geometry={barGeometry({id:task.id,startDate:task.startDate,endDateExclusive:task.endDateExclusive,y:row.y},sceneBars,sceneCamera)} item={task} target={{ kind: 'task', id: task.id }} camera={sceneCamera} viewportWidth={width} y={row.y} color={process?.color ?? '#888888'}
-                selected={validMulti?.kind==='task'?validMulti.ids.includes(task.id):selection?.id===task.id} highlighted={hovered === task.id || gesture.affectedIds.includes(task.id)} expanded={false} toggle={undefined} onSelect={select} onRename={rename} onHover={setHovered} onGesture={startBar} />;
+                selected={validMulti?.kind==='task'?validMulti.ids.includes(task.id):selection?.id===task.id} highlighted={hoverIds.has(task.id) || gesture.affectedIds.includes(task.id)} expanded={false} toggle={undefined} onSelect={select} onRename={rename} onHover={setHovered} onGesture={startBar} />;
             });
           })}
         </div>

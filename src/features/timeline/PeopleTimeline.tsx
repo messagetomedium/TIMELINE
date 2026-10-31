@@ -34,6 +34,7 @@ export function PeopleTimeline({
     height = Math.max(44, rows.length * 28 + 12);
   const related = new Set([
     hovered,
+    ...(rows.find((row) => row.id === hovered)?.items.map((w) => w.id) ?? []),
     ...snapshot.tasks.filter((t) => t.processId === hovered).map((t) => t.id),
   ]);
   return (
@@ -112,7 +113,7 @@ export function PeopleTimeline({
                       }
                       title={segment.title}
                       onMouseEnter={() => {
-                        onHover(segment.targetIds[0] ?? null);
+                        onHover(row.id);
                       }}
                       onMouseLeave={() => {
                         onHover(null);

@@ -1,3 +1,4 @@
+import { occupancy } from "../../domain/v2/occupancy";
 import { checkpointScene } from "../../domain/v2/checkpointLayout";
 import { AssignmentControl } from "./PeopleUI";
 import type { SendPeople } from "./PeopleUI";
@@ -103,6 +104,10 @@ export function FoundationTimeline({
         onCreateWork={() => Promise.resolve(null)}
         foundation={{
           snapshot,
+          hoverIds: (hovered) =>
+            occupancy(snapshot, catalog)
+              .find((row) => row.id === hovered)
+              ?.items.map((w) => w.id) ?? [],
           people: (props, scene) => (
             <PeopleTimeline
               {...props}
