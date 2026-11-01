@@ -19,6 +19,7 @@ interface PortfolioProps extends ProjectActionProps {
   readonly preferences: PortfolioPreferences;
   readonly onPreferences: (preferences: PortfolioPreferences) => void;
   readonly onOpen: (id: ProjectId) => void;
+  readonly onReorder?: ((ids: string[]) => void) | undefined;
   readonly onShift: (id: ProjectId, days: number, revision: number) => void;
 }
 interface Gesture {
@@ -27,7 +28,11 @@ interface Gesture {
   delta: number; cameraPreview: TimelineCamera | null;
 }
 
-export function PortfolioTimeline({ documents, preferences, onPreferences, onOpen, onShift, ...actions }: PortfolioProps) {
+export function PortfolioTimeline({ documents, preferences, onPreferences, onOpen, onShift, onReorder, ...actions }: PortfolioProps) {
+  const rowDrag = useRef<{ pointer: number; y: number; from: number; to: number; ids: string[] } | null>(null);
+  const [rowOrder, setRowOrder] = useState<string[] | null>(null);
+  const byId = new Map<string, ProjectDocument>(documents.map((d) => [d.project.id, d]));
+  const rows = rowOrder ? rowOrder.flatMap((id) => { const d = byId.get(id); return d ? [d] : []; }) : documents;
   const today = useLocalToday();
   const range = allProjectsRange(documents);
   const focus = range && (today < range.startDate || today >= range.endDateExclusive) ? range.startDate : today;
@@ -62,6 +67,9 @@ export function PortfolioTimeline({ documents, preferences, onPreferences, onOpe
   }, [focus, preferences, onPreferences]);
 
   const cancel = useCallback(() => {
+    const orderGesture = rowDrag.current;
+    rowDrag.current = null; setRowOrder(null);
+    if (orderGesture && surface.current?.hasPointerCapture(orderGesture.pointer)) surface.current.releasePointerCapture(orderGesture.pointer);
     const current = gesture.current;
     gesture.current = null;
     if (current && !current.document && body.current) body.current.scrollTop = current.scrollTop;
@@ -82,6 +90,13 @@ export function PortfolioTimeline({ documents, preferences, onPreferences, onOpe
     surface.current?.setPointerCapture(event.pointerId);
   };
   const onPointerMove = (event: PointerEvent) => {
+    const orderGesture = rowDrag.current;
+    if (orderGesture && orderGesture.pointer === event.pointerId) {
+      const to = Math.max(0, Math.min(documents.length - 1, orderGesture.from + Math.round((event.clientY - orderGesture.y) / 64)));
+      const ids = [...orderGesture.ids]; const [moved] = ids.splice(orderGesture.from, 1);
+      if (moved) ids.splice(to, 0, moved);
+      orderGesture.to = to; setRowOrder(ids); return;
+    }
     const current = gesture.current;
     if (!current || current.pointerId !== event.pointerId) return;
     const dx = event.clientX - current.x;
@@ -101,6 +116,13 @@ export function PortfolioTimeline({ documents, preferences, onPreferences, onOpe
     }
   };
   const finish = (event: PointerEvent) => {
+    const orderGesture = rowDrag.current;
+    if (orderGesture && orderGesture.pointer === event.pointerId) {
+      const ids = [...orderGesture.ids]; const [moved] = ids.splice(orderGesture.from, 1);
+      if (moved) ids.splice(orderGesture.to, 0, moved);
+      if (orderGesture.to !== orderGesture.from) onReorder?.(ids);
+      cancel(); return;
+    }
     const current = gesture.current;
     if (!current || current.pointerId !== event.pointerId) return;
     gesture.current = null;
@@ -116,14 +138,26 @@ export function PortfolioTimeline({ documents, preferences, onPreferences, onOpe
     <div className="calendar-row"><div className="calendar-gutter section-gutter" data-interactive><strong>Название проекта</strong><span>{visibleYears(calendar.range)}</span></div><div className="calendar-time" ref={viewport}><CalendarRuler camera={camera} width={width} calendar={calendar} today={today} /></div></div>
     <div className="portfolio-body" ref={body}><div className="portfolio-grid" style={{ height }}>
       <div className="portfolio-background"><TimeGrid camera={camera} width={width} height={height} calendar={calendar} weekends={preferences.showWeekends} /><div className="portfolio-today today-line" data-today={today} style={{ left: xForDate(today, camera) }}><span>Сегодня</span></div></div>
-      {documents.map((original, index) => {
+      {rows.map((original, index) => {
         const document = previewDocument?.project.id === original.project.id ? previewDocument : original;
         const dates = portfolioRange(document);
         const left = xForDate(dates.startDate, camera);
         const barWidth = widthForInterval(dates, camera);
         const visibleInset = left < width && left + barWidth > 0 ? Math.max(0, -left) : 0;
         return <div className="portfolio-row" key={document.project.id} data-project-id={document.project.id} style={{ top: 20 + index * 64 }}>
-          <div className="portfolio-name" data-interactive><button className="portfolio-open-name" onClick={() => { onOpen(document.project.id); }} title={document.project.name}>{document.project.name}</button><ProjectActions document={original} {...actions} /></div>
+          <div className="portfolio-name" data-interactive>{onReorder && <button className="portfolio-order-handle" aria-label={`Изменить порядок проекта: ${document.project.name}`} onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            event.preventDefault(); event.stopPropagation();
+            rowDrag.current = { pointer: event.pointerId, y: event.clientY, from: index, to: index, ids: rows.map((d) => d.project.id) };
+            surface.current?.setPointerCapture(event.pointerId);
+          }} onKeyDown={(event) => {
+            if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+            event.preventDefault();
+            const to = index + (event.key === 'ArrowUp' ? -1 : 1);
+            if (to < 0 || to >= rows.length) return;
+            const ids = rows.map((d) => d.project.id); const [moved] = ids.splice(index,1);
+            if (moved) ids.splice(to,0,moved); onReorder(ids);
+          }}>↕</button>}<button className="portfolio-open-name" onClick={() => { onOpen(document.project.id); }} title={document.project.name}>{document.project.name}</button><ProjectActions document={original} {...actions} /></div>
           <div className="portfolio-track"><div className={`portfolio-bar ${previewDocument?.project.id === document.project.id ? 'preview' : ''}`} role="button" tabIndex={0} data-interactive data-start={dates.startDate} data-end={dates.endDateExclusive}
             data-revision={original.project.revision} aria-label={`Проект: ${document.project.name}`} title={`${document.project.name} · ${formatDate(dates.startDate)} — ${formatDate(addDays(dates.endDateExclusive, -1))}`}
             style={{ left, width: barWidth, '--bar-color': projectColor(document.project.id) } as CSSProperties}

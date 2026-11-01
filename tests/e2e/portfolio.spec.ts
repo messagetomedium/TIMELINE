@@ -1,0 +1,91 @@
+import { required } from "../../src/testing/required";
+import { expect, test } from "@playwright/test";
+import { create, current, documents, home, action, saved, drag } from "./helpers";
+import { portfolioFixture } from "../../src/testing/portfolioFixture";
+import { createTemplate } from "../../src/domain/v2/template";
+import { dateOnly, addDays } from "../../src/domain";
+import { WORKSPACE_ID } from "../../src/domain/v2/model";
+import { emptyCatalog } from "../../src/domain/v2/peopleModel";
+import { newPerson } from "../../src/domain/v2/people";
+
+test.use({ viewport: { width:1440, height:900 } });
+test.beforeEach(async ({page}) => { await page.goto("./"); await expect(page.getByRole("heading",{name:"Проекты",exact:true})).toBeVisible(); });
+test("archive restores complete data and independent portfolio history across F5 without resurrecting old content", async ({page}) => {
+  const d = await create(page,"Архивный"); await home(page);
+  await action(page,"Архивный","Удалить");
+  await page.getByRole("dialog",{name:"Архивирование проекта"}).getByRole("button",{name:"В архив",exact:true}).click(); await saved(page);
+  await expect(page.locator(".saved-project-card")).toHaveCount(0);
+  await expect(page.getByRole("button",{name:"Открыть проект: Архивный",exact:true})).toHaveCount(0);
+  await page.getByRole("button",{name:"Архив",exact:true}).click();
+  await expect(page.getByRole("heading",{name:"Архив",exact:true})).toBeVisible();
+  await expect(page.locator(".saved-project-card")).toHaveCount(1);
+  await page.getByRole("button",{name:"Восстановить проект",exact:true}).click(); await saved(page);
+  await page.reload(); await saved(page);
+  await page.getByRole("button",{name:"Отменить в портфеле",exact:true}).click(); await saved(page);
+  await expect(page.locator(".saved-project-card")).toHaveCount(1);
+  await page.getByRole("button",{name:"Повторить в портфеле",exact:true}).click(); await saved(page);
+  await page.getByRole("button",{name:"Все проекты",exact:true}).click();
+  await expect(page.locator(".saved-project-card")).toHaveCount(1);
+  const restored = required((await documents(page)).find((v) => v.project.id===d.project.id));
+  expect(restored.tasks).toEqual(d.tasks); expect(restored.processes).toEqual(d.processes); expect(restored.assignments).toEqual(d.assignments); expect(restored.checkpoints).toEqual(d.checkpoints);
+  expect(restored.project.archivedAt).toBeNull();
+});
+test("inactive visibility, independent card/row order, pointer cancellation, persisted Undo and horizontal dates", async ({page}) => {
+  await create(page,"А"); await home(page); await create(page,"Б");
+  await page.getByRole("button",{name:"Проект",exact:true}).click();
+  await page.getByLabel("Показывать даты в портфеле").click(); await saved(page);
+  expect((await current(page)).project.isScheduled).toBe(false);
+  await home(page); await create(page,"В"); await home(page);
+  await expect(page.locator(".saved-project-card h2")).toHaveText(["В","Б","А"]);
+  await expect(page.locator(".saved-project-card").filter({has:page.getByRole("heading",{name:"Б",exact:true})})).toContainText("Неактивный");
+  await page.getByRole("button",{name:"Таймлайн",exact:true}).click(); await saved(page);
+  const names = page.locator(".portfolio-open-name");
+  await expect(names).toHaveText(["В","А"]);
+  await page.getByRole("button",{name:"Показать неактивные",exact:true}).click(); await saved(page);
+  await expect(names).toHaveText(["В","Б","А"]);
+  const before = await documents(page);
+  const handle = page.getByRole("button",{name:"Изменить порядок проекта: В",exact:true});
+  const box = await handle.boundingBox(); if(!box) throw Error("missing handle");
+  await page.mouse.move(box.x+box.width/2,box.y+box.height/2); await page.mouse.down(); await page.mouse.move(box.x+box.width/2,box.y+box.height/2+128,{steps:8});
+  await expect(names).toHaveText(["Б","А","В"]);
+  await page.keyboard.press("Escape"); await page.mouse.up(); await expect(names).toHaveText(["В","Б","А"]);
+  const start = await handle.boundingBox(); if(!start) throw Error("missing handle");
+  await page.mouse.move(start.x+start.width/2,start.y+start.height/2); await page.mouse.down(); await page.mouse.move(start.x+start.width/2,start.y+start.height/2+128,{steps:8}); await page.mouse.up(); await saved(page);
+  await expect(names).toHaveText(["Б","А","В"]); expect(await documents(page)).toEqual(before);
+  await page.reload(); await saved(page); await expect(names).toHaveText(["Б","А","В"]);
+  await page.getByRole("button",{name:"Отменить в портфеле",exact:true}).click(); await saved(page); await expect(names).toHaveText(["В","Б","А"]);
+  await page.getByRole("button",{name:"Повторить в портфеле",exact:true}).click(); await saved(page); await expect(names).toHaveText(["Б","А","В"]);
+  await page.getByRole("button",{name:"Карточки",exact:true}).click(); await expect(page.locator(".saved-project-card h2")).toHaveText(["В","Б","А"]);
+  await page.getByRole("button",{name:"Таймлайн",exact:true}).click();
+  await page.getByLabel("Шаг",{exact:true}).selectOption("1d"); await saved(page);
+  const a = required(before.find((d) => d.project.name==="А")), scale = Number(await page.getByLabel("Общий таймлайн проектов").getAttribute("data-px-per-day"));
+  await drag(page,page.getByRole("button",{name:"Переместить проект: А",exact:true}),scale); await saved(page);
+  expect((await documents(page)).find((d) => d.project.id===a.project.id)?.project.startDate).toBe(addDays(a.project.startDate,1));
+});
+test("bounded large project opens from lightweight home without reading other detail records", async ({page,browserName}) => {
+  test.skip(browserName !== "chromium", "Bounded load check runs once; WebKit covers archive and portfolio gestures");
+  const big=portfolioFixture(), docs=[...Array.from({length:39},(_,i) => createTemplate(`Малый ${String(i)}`,"",dateOnly("2026-11-02"),() => crypto.randomUUID(),new Date().toISOString())),big];
+  const catalog=emptyCatalog(WORKSPACE_ID);
+  catalog.people=Array.from({length:100},(_,i)=>newPerson(catalog,crypto.randomUUID(),{firstName:`Человек ${String(i)}`,lastName:"",defaultRole:"",contacts:"",note:""}));
+  await page.getByLabel("Файл резервной копии").setInputFiles({name:"bounded.json",mimeType:"application/json",buffer:Buffer.from(JSON.stringify({format:"timeline-backup",version:2,exportedAt:new Date().toISOString(),documents:docs,preferences:{version:1,mode:"cards",portfolio:{camera:null,step:"1w",showWeekends:true}},catalog:{people:catalog.people,retiredAssignments:[]}}))});
+  await page.getByRole("dialog",{name:"Импорт резервной копии"}).getByRole("button",{name:"Импортировать",exact:true}).click(); await saved(page);
+  const measurements = await page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>((resolve,reject) => { const r=indexedDB.open("timeline-workspace-v2"); r.onsuccess=()=>{resolve(r.result);}; r.onerror=()=>{reject(r.error ?? Error("IndexedDB open failed"));}; });
+    const read = async (name:string) => {
+      const start=performance.now();
+      const values=await new Promise<unknown[]>((resolve,reject)=>{const r=db.transaction(name).objectStore(name).getAll();r.onsuccess=()=>{resolve(r.result as unknown[]);};r.onerror=()=>{reject(r.error ?? Error("IndexedDB read failed"));};});
+      return {ms:performance.now()-start,bytes:JSON.stringify(values).length};
+    };
+    try {return {full:await read("documents"),summary:await read("summaries")};} finally {db.close();}
+  });
+  await page.addInitScript(() => {
+    const original = Object.getOwnPropertyDescriptor(IDBObjectStore.prototype,"getAll")?.value as typeof IDBObjectStore.prototype.getAll;
+    IDBObjectStore.prototype.getAll = function(...args:Parameters<typeof original>) { if(this.name==="documents") throw Error("Home must not read all project details"); return original.apply(this,args); };
+  });
+  const t=Date.now(); await page.reload(); await saved(page);
+  await expect(page.locator(".saved-project-card")).toHaveCount(40); await expect(page.locator(".task-bar")).toHaveCount(0);
+  const homeMs=Date.now()-t, open=Date.now();
+  await page.locator(".saved-project-card").filter({hasText:"Нагрузочный"}).getByRole("button",{name:"Открыть",exact:true}).click(); await saved(page);
+  await expect(page.getByRole("main",{name:"Редактор таймлайна"})).toBeVisible(); await expect(page.locator(".process-bar")).toHaveCount(100); await expect(page.locator(".task-bar")).toHaveCount(0);
+  console.log(JSON.stringify({measurements,homeMs,openMs:Date.now()-open,domElements:await page.locator("*").count()}));
+});

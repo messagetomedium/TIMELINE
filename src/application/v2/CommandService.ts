@@ -1,3 +1,4 @@
+import type { PortfolioCommand } from "./portfolio";
 import {
   newPerson,
   applyPeople,
@@ -319,6 +320,31 @@ export class CommandService {
     };
     return d;
   }
+  async screen(id: string | null) {
+    const [documents, preferences, views, catalog, portfolio] = await Promise.all([
+      this.repository.summaries(), this.repository.preferences(), this.repository.views(), this.repository.loadCatalog(), this.repository.loadPortfolio(),
+    ]);
+    const active = id ? await this.repository.load(id) : null;
+    const historyIssues: string[] = [];
+    if (active) {
+      const row = await this.repository.loadHistory(active.project.id), h = readHistory(row, active);
+      if (h) this.histories.set(active.project.id, h); else this.histories.delete(active.project.id);
+      if (row && !h) historyIssues.push(`${active.project.name}: ${HISTORY_CONFLICT}`);
+    }
+    return { documents, active, preferences, views, catalog, portfolio, historyIssues };
+  }
+  async portfolioCommand(expected: number, command: PortfolioCommand | "undo" | "redo") {
+    const result = await this.repository.portfolioCommand(expected, command, this.now());
+    this.histories.clear();
+    this.ownRevisions.clear();
+    return result;
+  }
+  async projectCommand(id: string, command: ContentCommand, revision?: number, local = false) {
+    const d = await this.repository.load(id);
+    if (!d) throw new RevisionConflict();
+    const input = { ...this.envelope(d, command), expectedRevision: revision ?? d.project.revision };
+    return local ? this.executeLocal(input) : this.execute(input);
+  }
   async snapshot() {
     const [documents, preferences, views, catalog] = await Promise.all([
       this.repository.all(),
@@ -347,12 +373,14 @@ export class CommandService {
   }
   async exportBackup() {
     const snapshot = await this.snapshot();
+    const portfolio = await this.repository.loadPortfolio();
     return JSON.stringify(
       v2BackupSchema.parse({
         format: "timeline-backup",
         version: 2,
         exportedAt: this.now(),
         documents: snapshot.documents,
+        portfolioOrder: portfolio.order,
         preferences: snapshot.preferences,
         catalog: {
           people: snapshot.catalog.people,
@@ -365,7 +393,7 @@ export class CommandService {
   }
   async previewImport(text: string) {
     const backup = v2BackupSchema.parse(JSON.parse(text));
-    const existing = await this.repository.all();
+    const existing = await this.repository.summaries();
     return {
       backup,
       collisions: backup.documents.filter((d) =>
@@ -448,7 +476,7 @@ export class CommandService {
             }),
           }
         : {}),
-    });
+    }, parsed.portfolioOrder?.map((id) => copies ? ids.get(id) ?? id : id));
   }
   async duplicate(id: string) {
     const source = await this.repository.load(id);
