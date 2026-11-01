@@ -81,7 +81,7 @@ test("stage, work and checkpoint share calendar coordinates; stages occupy neigh
     third = page.locator(`[data-entity-id="${required(d.processes[2]).id}"]`);
   expect((await box(first)).y).toBe((await box(third)).y);
   const left = await page
-    .locator(".checkpoint-line")
+    .locator(".timeline-canvas .checkpoint-line")
     .evaluate((el) => Number.parseFloat((el as HTMLElement).style.left));
   expect(left).toBeCloseTo(pan + 14 * zoom, 1);
 });

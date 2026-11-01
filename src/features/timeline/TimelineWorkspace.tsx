@@ -1,3 +1,6 @@
+import { barGeometry } from '../../domain/barGeometry';
+import type { SceneBar } from '../../domain/barGeometry';
+import type { CalendarArea } from './CalendarShading';
 import { selectWork } from '../../application/v2/workSelection';
 import type { WorkSelection } from '../../application/v2/workSelection';
 import { processIdSchema, taskIdSchema } from '../../domain';
@@ -31,6 +34,10 @@ import '../../styles/timeline.css';
 
 export interface FoundationUI {
   snapshot:Snapshot;
+  hoverIds?:(hovered:string|null)=>readonly string[];
+  range:()=>import('../../domain').DateInterval;
+  area:(scene:Snapshot|undefined)=>CalendarArea;
+  stageHeight:(camera:TimelineCamera,width:number,scene:Snapshot|undefined)=>number;
   onCreate:(kind:'process'|'task',parent:string|null)=>void;
   inspectorCollapsed:boolean;
   onToggleInspector:()=>void;
@@ -40,12 +47,13 @@ export interface FoundationUI {
   onSelect: () => void;
   onStageSelect: (id: StageMarkerId) => void;
   inspector: (selection: Selection | null, scene: Snapshot | undefined, count:number) => ReactNode;
-  stages: (camera: TimelineCamera, width: number, scene: Snapshot | undefined, start: (event: PointerEvent, id: StageMarkerId) => void) => ReactNode;
+  stages: (camera: TimelineCamera, width: number, scene: Snapshot | undefined, start: (event: PointerEvent, id: StageMarkerId) => void, checkpointStart:(e:PointerEvent,id:string,date:import('../../domain').DateOnly)=>void) => ReactNode;
   checkpoints: (camera: TimelineCamera, scene: Snapshot | undefined, start:(e:PointerEvent,id:string,date:import('../../domain').DateOnly)=>void) => ReactNode;
   gaps: (scene:Snapshot|undefined)=>readonly ResultGap[];
   results: (camera:TimelineCamera,scene:Snapshot|undefined,layout:ReturnType<typeof layoutTimeline>)=>ReactNode;
   resultsHeight: (scene:Snapshot|undefined,layout:ReturnType<typeof layoutTimeline>)=>number;
   onRename: (target:Selection,title:string)=>void;
+  people?: (props: import('./PeopleTimeline').PeopleTimelineProps,scene:Snapshot|undefined)=>ReactNode;
   toolbar: ReactNode;
 }
 interface Props {
@@ -80,6 +88,7 @@ export function TimelineWorkspace({ document, onCommit, initialView, onViewChang
   const validMulti=multi?{...multi,ids:multi.ids.filter(id=>(multi.kind==='process'?document.processes:document.tasks).some(x=>x.id===id))}:null;
   const [hovered, setHovered] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const hoverIds=new Set([hovered,...(foundation?.hoverIds?.(hovered)??[])]);
   const [editingStage, setEditingStage] = useState<StageMarkerId | null>(null);
   const gesture = useTimelineGesture({ document, camera, step, surface, body, setCamera, onCommit, onError: setError, onStageClick: foundation?.onStageSelect ?? setEditingStage, evaluate: foundation?.evaluate, onCommand: foundation ? (command,revision)=>{if(command.type==='GroupMove'&&command.kind==='task'&&command.destination)setExpanded(old=>new Set([...old,processIdSchema.parse(command.destination?.parentId)]));foundation.onCommand(command,revision);} : undefined,
     stack:foundation?(d,drop)=>groupDrop(foundation.snapshot,d,foundation.layout,expanded,drop):undefined });
@@ -88,6 +97,8 @@ export function TimelineWorkspace({ document, onCommit, initialView, onViewChang
   const layout = (foundation?.layout ?? layoutTimeline)(sceneDocument, sceneExpanded);
   const sceneCamera:TimelineCamera={...camera,gaps:showResults?foundation?.gaps(gesture.snapshot)??[]:[]};
   const bodyHeight = Math.max(460, layout.height,showResults?foundation?.resultsHeight(gesture.snapshot,layout)??0:0);
+  const sceneBars:SceneBar[]=layout.rows.flatMap(row=>(row.kind==='process'?sceneDocument.processes:sceneDocument.tasks).filter(w=>w.laneId===row.id).map(w=>({id:w.id,startDate:w.startDate,endDateExclusive:w.endDateExclusive,y:row.y})));
+  const area=foundation?.area(gesture.snapshot);
   const calendar = getCalendarGeometry(getVisibleDateRange(width, sceneCamera), step);
   const activeStage = sceneDocument.stageMarkers.find((stage) => stage.id === editingStage);
 
@@ -147,17 +158,17 @@ export function TimelineWorkspace({ document, onCommit, initialView, onViewChang
     <div className={`timeline-surface ${gesture.active ? `gesture-${gesture.active}` : ''} ${gesture.invalid ? 'invalid-gesture' : ''}`} ref={surface}
       onPointerDown={gesture.startPan} onPointerMove={gesture.onPointerMove} onPointerUp={gesture.onPointerUp} onPointerCancel={gesture.onPointerCancel} onLostPointerCapture={gesture.onLostPointerCapture}>
       <div className="calendar-row"><div className="calendar-gutter section-gutter" data-interactive><strong>Календарь</strong><span>{visibleYears(calendar.range)}</span></div>
-        <div className="calendar-time" ref={timeViewport}><CalendarRuler camera={sceneCamera} width={width} calendar={calendar} today={today} /></div>
+        <div className="calendar-time" ref={timeViewport}><CalendarRuler camera={sceneCamera} width={width} calendar={calendar} today={today} area={area}/></div>
       </div>
-      <div className="stage-row"><div className="section-gutter stage-gutter" data-interactive>Этапы</div>
-        {foundation ? foundation.stages(sceneCamera, width, gesture.snapshot, gesture.startStage) : <StageBand document={sceneDocument} camera={sceneCamera} width={width} calendar={calendar} weekends={weekends} today={today} onStart={gesture.startStage} onEdit={setEditingStage} />}
+      <div className="stage-row" style={foundation?{height:foundation.stageHeight(sceneCamera,width,gesture.snapshot)}:undefined}><div className="section-gutter stage-gutter" data-interactive>Этапы</div>
+        {foundation ? foundation.stages(sceneCamera, width, gesture.snapshot, gesture.startStage, gesture.startCheckpoint) : <StageBand document={sceneDocument} camera={sceneCamera} width={width} calendar={calendar} weekends={weekends} today={today} onStart={gesture.startStage} onEdit={setEditingStage} />}
       </div>
       <div className="timeline-body" ref={body} aria-label="Производственный план" onScroll={(event) => { setScrollY(event.currentTarget.scrollTop); }}>
         <div className="timeline-body-layout" style={{ height: bodyHeight }}>
         <div className="section-gutter production-gutter" data-interactive><div><strong>Процессы</strong><small>{document.processes.length} процессов · {document.tasks.length} задачи</small><button className="add-work-button" onClick={() => { if(foundation)foundation.onCreate('process',activeProcess?.id??null);else setCreating('process'); }}>+ Процесс</button>{activeProcess && <button className="add-work-button" onClick={() => { if(foundation)foundation.onCreate('task',activeProcess.id);else setCreating('task'); }}>+ Задача</button>}</div></div>
         <div className="timeline-canvas" style={{ height: bodyHeight }}>
           {showResults && foundation?.results(sceneCamera,gesture.snapshot,layout)}
-          <TimeGrid camera={sceneCamera} width={width} height={bodyHeight} calendar={calendar} weekends={weekends} />
+          <TimeGrid camera={sceneCamera} width={width} height={bodyHeight} calendar={calendar} weekends={weekends} area={area}/>
           {document.processes.length === 0 && <div className="empty-editor-note" data-interactive><h2>Чистый лист</h2><p>{foundation ? 'Выберите этап, чтобы настроить план.' : 'Календарь готов. Добавьте первый процесс кнопкой «+ Процесс» слева.'}</p></div>}
           {layout.rows.map((row) => <div key={`${row.id}:${row.processId ?? ''}`} className="lane-divider" style={{ top: row.y + 30 }} />)}
           {layout.groups.map((group) => {
@@ -167,18 +178,18 @@ export function TimelineWorkspace({ document, onCommit, initialView, onViewChang
           <DateLines document={sceneDocument} camera={sceneCamera} today={today} height={bodyHeight} />
           {foundation?.checkpoints(sceneCamera, gesture.snapshot, gesture.startCheckpoint)}
           {layout.rows.flatMap((row) => {
-            if (row.kind === 'process') return sceneDocument.processes.filter((item) => item.laneId === row.id).map((process) => <TimelineBar key={process.id} item={process} target={{ kind: 'process', id: process.id }} camera={sceneCamera} viewportWidth={width} y={row.y} color={process.color}
-              selected={validMulti?.kind==='process'?validMulti.ids.includes(process.id):selection?.id===process.id} highlighted={hovered === process.id || gesture.affectedIds.includes(process.id)} expanded={sceneExpanded.has(process.id)} toggle={() => { toggle(process.id); }} onSelect={select} onRename={rename} onHover={setHovered} onGesture={startBar} />);
+            if (row.kind === 'process') return sceneDocument.processes.filter((item) => item.laneId === row.id).map((process) => <TimelineBar key={process.id} geometry={barGeometry({id:process.id,startDate:process.startDate,endDateExclusive:process.endDateExclusive,y:row.y},sceneBars,sceneCamera)} item={process} target={{ kind: 'process', id: process.id }} camera={sceneCamera} viewportWidth={width} y={row.y} color={process.color}
+              selected={validMulti?.kind==='process'?validMulti.ids.includes(process.id):selection?.id===process.id} highlighted={hoverIds.has(process.id) || gesture.affectedIds.includes(process.id)} expanded={sceneExpanded.has(process.id)} toggle={() => { toggle(process.id); }} onSelect={select} onRename={rename} onHover={setHovered} onGesture={startBar} />);
             return sceneDocument.tasks.filter((item) => item.laneId === row.id).map((task) => {
               const process = sceneDocument.processes.find((item) => item.id === task.processId);
-              return <TimelineBar key={task.id} item={task} target={{ kind: 'task', id: task.id }} camera={sceneCamera} viewportWidth={width} y={row.y} color={process?.color ?? '#888888'}
-                selected={validMulti?.kind==='task'?validMulti.ids.includes(task.id):selection?.id===task.id} highlighted={hovered === task.id || gesture.affectedIds.includes(task.id)} expanded={false} toggle={undefined} onSelect={select} onRename={rename} onHover={setHovered} onGesture={startBar} />;
+              return <TimelineBar key={task.id} geometry={barGeometry({id:task.id,startDate:task.startDate,endDateExclusive:task.endDateExclusive,y:row.y},sceneBars,sceneCamera)} item={task} target={{ kind: 'task', id: task.id }} camera={sceneCamera} viewportWidth={width} y={row.y} color={process?.color ?? '#888888'}
+                selected={validMulti?.kind==='task'?validMulti.ids.includes(task.id):selection?.id===task.id} highlighted={hoverIds.has(task.id) || gesture.affectedIds.includes(task.id)} expanded={false} toggle={undefined} onSelect={select} onRename={rename} onHover={setHovered} onGesture={startBar} />;
             });
           })}
         </div>
         </div>
       </div>
-      <PerformersSection document={sceneDocument} camera={sceneCamera} width={width} calendar={calendar} weekends={weekends} today={today} hovered={hovered} onHover={setHovered} />
+      {foundation?.people?foundation.people({camera:sceneCamera,width,calendar,weekends,today,hovered,onHover:setHovered},gesture.snapshot):<PerformersSection document={sceneDocument} camera={sceneCamera} width={width} calendar={calendar} weekends={weekends} today={today} hovered={hovered} onHover={setHovered} />}
       <div className="toolbar-dock" data-interactive>
         <div className="floating-toolbar" role="toolbar" aria-label="Вид таймлайна">
           {foundation?.toolbar}{validMulti&&validMulti.ids.length>1&&<output className="selection-count" aria-label="Выбрано работ">{validMulti.ids.length}</output>}
@@ -192,7 +203,7 @@ export function TimelineWorkspace({ document, onCommit, initialView, onViewChang
           </select>
           <span className="toolbar-separator" /><button className="weekend-button" aria-pressed={weekends} onClick={() => { setWeekends((previous) => !previous); }}><i />Выходные</button>
           <span className="toolbar-separator" /><button className="navigation-button" onClick={() => { setCamera((previous) => cameraForFocusDate({...previous,gaps:camera.gaps??[]}, today, width, 0.5, Math.max(WORK_ZOOM, previous.pxPerDay))); }}>Сегодня</button>
-          <button className="navigation-button" onClick={() => { setCamera((previous) => cameraForFitRange({...previous,gaps:camera.gaps??[]}, scheduleRange(document), width)); }}>Весь проект</button>
+          <button className="navigation-button" onClick={() => { setCamera((previous) => cameraForFitRange({...previous,gaps:camera.gaps??[]}, foundation?.range()??scheduleRange(document), width)); }}>Весь проект</button>
         </div>
         <span className="gesture-hint">Фон — панорама · ⠿ — перенос · Esc — отмена</span>
       </div>

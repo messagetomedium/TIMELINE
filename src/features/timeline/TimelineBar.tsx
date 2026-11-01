@@ -1,3 +1,4 @@
+import type { barGeometry } from '../../domain/barGeometry';
 import { useState } from 'react';
 import { CommitText } from './CommitText';
 import type { CSSProperties, PointerEvent } from 'react';
@@ -7,6 +8,7 @@ import { widthForInterval, xForDate } from '../../domain/timeline';
 import type { TimelineCamera } from '../../domain/timeline';
 
 interface Props {
+  readonly geometry?:ReturnType<typeof barGeometry>;
   readonly item: Process | Task;
   readonly target: Selection;
   readonly camera: TimelineCamera;
@@ -23,16 +25,16 @@ interface Props {
   readonly onGesture: (event: PointerEvent, target: Selection, action: 'move' | 'start' | 'end') => void;
 }
 
-export function TimelineBar({ item, target, camera, viewportWidth, y, color, selected, highlighted, expanded, toggle, onSelect, onRename, onHover, onGesture }: Props) {
+export function TimelineBar({ item, target, camera, viewportWidth, y, color, selected, highlighted, expanded, toggle, onSelect, onRename, onHover, onGesture, geometry }: Props) {
   const [editing, setEditing] = useState(false);
-  const style: CSSProperties = { left: xForDate(item.startDate, camera), top: y, width: widthForInterval(item, camera), '--bar-color': color } as CSSProperties;
+  const style: CSSProperties = { left: geometry?.left??xForDate(item.startDate, camera), top: y, width: geometry?.width??widthForInterval(item, camera), '--bar-color': color } as CSSProperties;
   const inView = xForDate(item.startDate, camera) < viewportWidth && xForDate(item.endDateExclusive, camera) > 0;
   const visibleInset = inView ? Math.max(0, -xForDate(item.startDate, camera)) : 0;
   const rightInset = inView ? Math.max(7, xForDate(item.endDateExclusive, camera) - viewportWidth + 7) : 7;
   return (
     <div className={`timeline-bar ${target.kind}-bar ${selected ? 'selected' : ''} ${highlighted ? 'highlighted' : ''}`} style={style}
       role="button" tabIndex={0} aria-label={`${target.kind === 'process' ? 'Процесс' : 'Задача'}: ${item.title}`} data-interactive
-      data-entity-id={item.id} data-selected={selected} data-start={item.startDate} data-end={item.endDateExclusive}
+      data-entity-id={item.id} data-selected={selected} data-time-start={geometry?.timeStart} data-time-end={geometry?.timeEnd} data-start={item.startDate} data-end={item.endDateExclusive}
       title={item.title} onClick={(event) => { event.stopPropagation(); onSelect(target,event); }}
       onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onSelect(target,event); } }}
       onMouseEnter={() => { onHover(item.id); }} onMouseLeave={() => { onHover(null); }}>

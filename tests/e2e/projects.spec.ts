@@ -44,7 +44,7 @@ test("fresh storage is empty; local today and chosen date create neutral indepen
   await expect(page.locator(".process-bar")).toHaveCount(4);
   await expect(page.locator(".task-bar")).toHaveCount(8);
   await expect(page.locator(".performer-row")).toHaveCount(0);
-  await expect(page.locator(".checkpoint-line")).toHaveAttribute(
+  await expect(page.locator(".timeline-canvas .checkpoint-line")).toHaveAttribute(
     "data-date",
     "2028-03-10",
   );

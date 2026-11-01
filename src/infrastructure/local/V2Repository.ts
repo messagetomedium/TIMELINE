@@ -1,3 +1,10 @@
+import {
+  catalogSchema,
+  emptyCatalog,
+  activeAssignment,
+} from "../../domain/v2/peopleModel";
+import type { CatalogState } from "../../domain/v2/peopleModel";
+import type { PeopleCommit } from "../../application/v2/ports";
 import type { StoredHistory } from "../../application/v2/history";
 import { historyKey } from "../../application/v2/history";
 import { Dexie } from "dexie";
@@ -17,6 +24,7 @@ import {
 } from "../../application/workspace/model";
 import type { WorkspacePreferences } from "../../application/workspace/model";
 export class V2Database extends Dexie {
+  workspaceData!: Table<{ key: string; value: unknown }, string>;
   history!: Table<StoredHistory, string>;
   documents!: Table<Snapshot, string>;
   preferences!: Table<{ key: string; value: unknown }, string>;
@@ -27,12 +35,87 @@ export class V2Database extends Dexie {
       preferences: "&key",
     });
     this.version(3).stores({ history: "&key" });
+    this.version(4).stores({ workspaceData: "&key" });
   }
 }
 export class V2Repository {
   readonly db: V2Database;
   constructor(db = new V2Database()) {
     this.db = db;
+  }
+  async loadCatalog() {
+    const row = await this.db.workspaceData.get("people");
+    const catalog = row
+      ? catalogSchema.parse(row.value)
+      : emptyCatalog(WORKSPACE_ID);
+    if (catalog.workspaceId !== WORKSPACE_ID)
+      throw Error(
+        "Справочник принадлежит другому пространству. Данные не сброшены",
+      );
+    return catalog;
+  }
+  async peopleTransaction(
+    expected: number,
+    change: (catalog: CatalogState, documents: Snapshot[]) => CatalogState,
+  ) {
+    return this.db.transaction(
+      "rw",
+      this.db.workspaceData,
+      this.db.documents,
+      async () => {
+        const old = await this.loadCatalog();
+        if (old.revision !== expected)
+          throw Error(
+            "Справочник изменён в другой вкладке. Обновите данные и повторите",
+          );
+        const next = change(old, await this.all());
+        if (next === old) return old;
+        if (next.revision !== old.revision + 1)
+          throw Error("Неверная ревизия справочника");
+        const parsed = catalogSchema.parse(next);
+        await this.db.workspaceData.put({ key: "people", value: parsed });
+        return parsed;
+      },
+    );
+  }
+  private async saveCatalogChange(
+    change: PeopleCommit | undefined,
+    document?: Snapshot,
+  ) {
+    if (!change) return;
+    const current = await this.loadCatalog();
+    if (current.revision !== change.expectedRevision)
+      throw Error(
+        "Справочник изменён в другой вкладке. Данные не перезаписаны",
+      );
+    if (!change.next) return;
+    const next = catalogSchema.parse(change.next);
+    if (next.revision !== current.revision + 1)
+      throw Error("Неверная ревизия справочника");
+    const removed = new Set(
+      current.people
+        .filter((p) => !next.people.some((x) => x.id === p.id))
+        .map((p) => p.id),
+    );
+    if (removed.size) {
+      const docs = (await this.all()).map((d) =>
+        d.project.id === document?.project.id ? document : d,
+      );
+      if (
+        docs.some((d) =>
+          d.assignments.some(
+            (a) =>
+              a.personId &&
+              removed.has(a.personId) &&
+              activeAssignment(a, current),
+          ),
+        )
+      )
+        throw Error(
+          "Исполнитель уже используется в другом назначении. Отмена не записана",
+        );
+    }
+    await this.db.workspaceData.put({ key: "people", value: next });
   }
   async loadHistory(id: string) {
     return (await this.db.history.get(historyKey(id))) ?? null;
@@ -43,13 +126,16 @@ export class V2Repository {
     history: StoredHistory,
     expectedHistoryToken: string | null,
     archiveOld: boolean,
+    people?: PeopleCommit,
   ) {
     await this.db.transaction(
       "rw",
       this.db.documents,
       this.db.preferences,
       this.db.history,
+      this.db.workspaceData,
       async () => {
+        await this.saveCatalogChange(people, d);
         const old = await this.loadHistory(d.project.id);
         if (
           (old?.token ?? null) !== expectedHistoryToken ||
@@ -143,13 +229,19 @@ export class V2Repository {
     );
   }
 
-  async insertBatch(values: Snapshot[], preferences?: WorkspacePreferences) {
+  async insertBatch(
+    values: Snapshot[],
+    preferences?: WorkspacePreferences,
+    people?: PeopleCommit,
+  ) {
     const parsed = values.map((d) => snapshotSchema.parse(d));
     await this.db.transaction(
       "rw",
       this.db.documents,
       this.db.preferences,
+      this.db.workspaceData,
       async () => {
+        await this.saveCatalogChange(people);
         const existing = await this.all();
         if (
           existing.filter((d) => !d.project.archivedAt).length +
@@ -166,6 +258,7 @@ export class V2Repository {
             d.tasks,
             d.results,
             d.checkpoints,
+            d.assignments,
           ].flatMap((list) => list.map((e) => e.id)),
         ];
         const seen = new Set(existing.flatMap(entityIds));

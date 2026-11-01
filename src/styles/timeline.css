@@ -182,3 +182,81 @@
 .inspector-collapsed .inspector-content { transform: translateX(280px); pointer-events: none; }
 .inspector-toggle { position: absolute; top: 8px; left: 4px; z-index: 2; width: 21px; height: 26px; padding: 0; border: 1px solid #dce1e9; border-radius: 5px; color: #7f7695; background: #fff; font-size: 20px; }
 .selection-count { font-size: 10px; padding: 3px 5px; color: #72618f; background: #f0ebf7; border-radius: 3px; }
+
+.range-editor { position: relative; margin-top: 18px; border-top: 1px solid #e4e7ed; padding-top: 14px; }
+.range-editor h3 { font-size: 12px; margin-bottom: 12px; }
+.range-inputs { display: flex; gap: 5px; align-items: flex-end; }
+.range-inputs label { flex: 1; min-width: 0; color: #8b91a0; font-size: 10px; }
+.range-inputs input { width: 100%; font-size: 11px; padding: 8px 3px; margin-top: 4px; text-align: center; }
+.range-inputs > span { padding-bottom: 9px; font-size: 12px; color: #9ca3b1; }
+.range-calendar-button { flex: 0 0 25px; height: 32px; display: grid; place-items: center; border: 1px solid #dce1e9; color: #758092; background: #fff; border-radius: 5px; padding: 0; }
+.range-popover { position: relative; z-index: 30; margin: 8px -10px 0; padding: 10px; background: white; border: 1px solid #d9dfe8; border-radius: 9px; box-shadow: 0 6px 22px #293c5420; }
+.range-popover header { display: flex; align-items: center; justify-content: space-between; font-size: 11px; margin-bottom: 8px; }
+.range-popover header button { border: 0; background: #f5f6f9; color: #778294; border-radius: 5px; width: 26px; height: 26px; }
+.range-weekdays, .range-days { display: grid; grid-template-columns: repeat(7,minmax(0,1fr)); text-align: center; font-size: 10px; }
+.range-weekdays span { color: #9aa2ae; padding: 5px 0; }
+.range-days button { border: 0; background: transparent; min-width: 0; height: 29px; padding: 0; color: #536175; font-size: 11px; }
+.range-days button.other-month { color: #bcc3cb; }
+.range-days button[data-in-range=true] { background: #edf0fa; }
+.range-days button[aria-pressed=true] { border-radius: 5px; background: #8e92b3; color: white; }
+.range-selection { padding: 8px 0; font-size: 10px; color: #7a8492; }
+.range-popover footer { display: flex; gap: 8px; justify-content: flex-end; }
+.range-popover .primary-button, .range-popover .quiet-button { padding: 7px 9px; font-size: 10px; }
+.field-error { margin: 8px 0; font-size: 11px; color: #a45656; }
+
+.calendar-shading { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
+.project-range-shade { fill: #bfcde5; fill-opacity: .13; }
+.checkpoint-day-shade { fill: #e7a7a7; fill-opacity: .22; }
+.timeline-canvas, .calendar-ruler { background-color: #fafbfc; }
+.checkpoint-lines { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
+.checkpoint-line { position: absolute; top: 0; bottom: 0; width: 0; padding: 0; border: 0; border-left: 2px solid #cc6f6f; transform: none; pointer-events: none; }
+.checkpoint-headers { position: absolute; inset: 0; pointer-events: none; z-index: 15; }
+.checkpoint-header-line { position: absolute; bottom: 0; width: 0; border-left: 2px solid #cc6f6f; }
+.checkpoint-grip { position: absolute; width: 13px; height: 13px; border: 2px solid #c86262; border-radius: 50%; background: #fff5f5; transform: translateX(-50%); cursor: ew-resize; touch-action: none; pointer-events: auto; z-index: 2; padding: 0; }
+.checkpoint-header-label { position: absolute; height: 22px; display: flex; gap: 5px; align-items: center; padding: 3px 5px; border: 0; border-radius: 4px; background: #fcf0f0; color: #ab6262; pointer-events: auto; text-align: left; }
+.checkpoint-header-label strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 10px; min-width: 0; }
+.checkpoint-header-label small { flex-shrink: 0; font-size: 9px; }
+.foundation-stage-band .stage-region { top: var(--checkpoint-header-height,0px); }
+.foundation-stage-band .stage-grip { top: calc(var(--checkpoint-header-height,0px) + 30px); }
+.foundation-stage-band .insert-stage-button { top: calc(var(--checkpoint-header-height,0px) + 48px); }
+
+.people-nav { flex-shrink: 0; font-size: 11px; }
+.people-catalog { width: min(700px,94vw); max-height: 85vh; overflow: auto; }
+.people-catalog header, .people-toolbar, .person-editor footer { display: flex; gap: 10px; align-items: center; justify-content: space-between; }
+.people-toolbar { justify-content: flex-start; margin: 16px 0; }
+.people-list { list-style: none; margin: 16px 0; padding: 0; }
+.people-list li { display: flex; align-items: center; gap: 8px; padding: 14px 0; border-bottom: 1px solid #edf0f5; }
+.people-list li > div { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.people-list strong, .people-list span, .people-list small { display: block; }
+.people-list span, .people-list small { margin-top: 5px; font-size: 11px; color: #949aaa; }
+.person-editor { max-height: 90vh; overflow: auto; }
+.person-editor label { display: block; margin: 14px 0; font-size: 12px; color: #747e8f; }
+.person-editor input, .person-editor textarea { display: block; width: 100%; margin-top: 6px; padding: 9px; font: inherit; border: 1px solid #dce1e9; border-radius: 5px; }
+.person-confirm { margin-top: 12px; padding: 12px; border: 1px solid #ded5e8; border-radius: 6px; background: #faf7fd; }
+.person-confirm p { margin-bottom: 12px; font-size: 12px; line-height: 1.6; }
+.person-confirm button { display: block; width: 100%; margin-top: 8px; }
+.assignment-control { position: relative; border-top: 1px solid #e4e7ed; margin-top: 20px; padding-top: 14px; }
+.assignment-control h3 { font-size: 12px; margin-bottom: 12px; }
+.assignment-control input, .details-inspector select { width: 100%; font: inherit; font-size: 12px; padding: 8px; margin-top: 6px; border: 1px solid #dce1e9; border-radius: 5px; background: white; color: #626d80; }
+.assignment-control .stage-actions { margin-top: 10px; padding-top: 10px; }
+.assigned-person { display: flex; gap: 8px; justify-content: space-between; align-items: center; margin-bottom: 12px; font-size: 12px; }
+.people-options { position: absolute; z-index: 18; margin: -8px 0 0; padding: 5px; list-style: none; background: white; border: 1px solid #dce1e9; border-radius: 6px; width: 100%; max-height: 180px; overflow: auto; box-shadow: 0 4px 14px #39485d15; }
+.people-options button { width: 100%; text-align: left; padding: 8px; font-size: 11px; border: 0; background: white; color: #626d80; }
+.people-options button:hover, .people-options button:focus { background: #eff1f7; }
+.assignment-records { margin-top: 14px; font-size: 10px; color: #8d94a2; line-height: 1.7; }
+.assignment-records p { margin-top: 7px; }
+.color-field { margin-top: 18px; }
+.color-field input { display: block; width: 42px; height: 26px; margin-top: 6px; padding: 1px; border: 1px solid #dce1e9; background: white; border-radius: 4px; }
+.people-empty { padding: 14px 20px; color: #a3a9b5; font-size: 11px; }
+.performer-segment[data-overlap=true] { height: 12px; top: 4px; }
+
+/* Keep both resize targets inside the visual bar, even at low zoom. */
+.timeline-bar .resize-handle { width: min(6px,45%); }
+.timeline-bar .resize-handle.start { left: 0; }
+.timeline-bar .resize-handle.end { right: 0; }
+
+.foundation-stage-band > .calendar-shading { z-index: 1; }
+.checkpoint-select-line { width: 8px; margin-left: -4px; pointer-events: auto; border-left: 0; cursor: pointer; }
+.checkpoint-select-line::before { content: ''; position: absolute; top: 0; bottom: 0; left: 4px; border-left: 2px solid #cc6f6f; }
+.checkpoint-select-line:focus-visible { outline: 1px solid #c86262; }
+.people-options button[aria-selected=true] { background: #eff1f7; }

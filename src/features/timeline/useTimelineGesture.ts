@@ -190,7 +190,7 @@ export function useTimelineGesture({
         command = {
           type: "checkpoint",
           id: operation.id,
-          date: snapDate(addDays(operation.date, days), step),
+          date: addDays(snapDate(addDays(operation.date, days+1), step),-1),
         };
       } else if (operation.kind === "stage") {
         const stage = current.document.stageMarkers.find(

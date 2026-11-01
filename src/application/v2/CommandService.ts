@@ -1,3 +1,17 @@
+import {
+  newPerson,
+  applyPeople,
+  undoPeople,
+  embeddedPersonChange,
+} from "../../domain/v2/people";
+import type { PeopleEnvelope } from "../../domain/v2/people";
+import {
+  catalogSchema,
+  activeAssignment,
+  samePerson,
+  retiredAssignmentSchema,
+} from "../../domain/v2/peopleModel";
+import type { PeopleCommit } from "./ports";
 import { planCommand, envelopeSchema } from "../../domain/v2/commands";
 import type { CommandEnvelope, ContentCommand } from "../../domain/v2/commands";
 import { createTemplate } from "../../domain/v2/template";
@@ -41,6 +55,18 @@ export class CommandService {
     const d = await this.repository.load(id);
     if (!d || d.project.revision !== revision) throw new RevisionConflict();
     return d;
+  }
+  async peopleExecute(envelope: PeopleEnvelope) {
+    return this.repository.peopleTransaction(
+      envelope.expectedRevision,
+      (catalog, docs) => applyPeople(catalog, envelope, docs, this.now()),
+    );
+  }
+  async peopleUndo(expectedRevision: number, redo = false) {
+    return this.repository.peopleTransaction(
+      expectedRevision,
+      (catalog, docs) => undoPeople(catalog, redo, docs, this.now()),
+    );
   }
   async create(input: {
     type: "CreateProject";
@@ -93,7 +119,23 @@ export class CommandService {
     const before = await this.source(e.projectId, e.expectedRevision);
     if (before.project.workspaceId !== e.workspaceId)
       throw Error("Чужое пространство");
-    const { document: after } = planCommand(before, e.command);
+    const catalog = await this.repository.loadCatalog();
+    const createdPerson =
+      e.command.type === "CreatePersonAndAssign"
+        ? newPerson(catalog, e.command.personId, e.command.fields)
+        : undefined;
+    const nextCatalog = createdPerson
+      ? catalogSchema.parse({
+          ...catalog,
+          revision: catalog.revision + 1,
+          people: [...catalog.people, createdPerson],
+        })
+      : undefined;
+    const { document: after } = planCommand(
+      before,
+      e.command,
+      nextCatalog ?? catalog,
+    );
     if (after === before) return;
     const saved = {
       ...after,
@@ -103,7 +145,10 @@ export class CommandService {
       prior = readHistory(row, before);
     const history = makeHistory(
       saved,
-      [...(prior?.undo ?? []), { before, after: saved }],
+      [
+        ...(prior?.undo ?? []),
+        { before, after: saved, ...(createdPerson ? { createdPerson } : {}) },
+      ],
       [],
     );
     await this.repository.commit(
@@ -112,6 +157,10 @@ export class CommandService {
       { key: historyKey(e.projectId), token: this.id(), value: history },
       row?.token ?? null,
       !!row && !prior,
+      {
+        expectedRevision: catalog.revision,
+        ...(nextCatalog ? { next: nextCatalog } : {}),
+      },
     );
     this.committed(
       e.projectId,
@@ -164,6 +213,7 @@ export class CommandService {
         revision: current.project.revision + 1,
         updatedAt: this.now(),
       },
+      assignments: restore(target.assignments, current.assignments),
       stages: restore(target.stages, current.stages),
       processes: restore(target.processes, current.processes),
       tasks: restore(target.tasks, current.tasks),
@@ -175,6 +225,35 @@ export class CommandService {
       ),
       viewPreferences: normalizeView(target, current.viewPreferences),
     });
+    const catalog = await this.repository.loadCatalog();
+    const currentCatalog = catalog;
+    if (
+      next.assignments.some(
+        (a) =>
+          a.personId && !currentCatalog.people.some((p) => p.id === a.personId),
+      ) &&
+      !entry.createdPerson
+    )
+      throw Error(
+        "Карточка исполнителя больше не существует. История проекта не перезаписала справочник",
+      );
+    let peopleChange: PeopleCommit | undefined = {
+      expectedRevision: currentCatalog.revision,
+    };
+    if (entry.createdPerson) {
+      const documents = (await this.repository.all()).map((d) =>
+        d.project.id === id ? next : d,
+      );
+      peopleChange = {
+        expectedRevision: catalog.revision,
+        next: embeddedPersonChange(
+          catalog,
+          entry.createdPerson,
+          !redo,
+          documents,
+        ),
+      };
+    }
     const history = makeHistory(
       next,
       redo ? [...h.undo, entry] : h.undo.slice(0, -1),
@@ -186,6 +265,7 @@ export class CommandService {
       { key: historyKey(id), token: this.id(), value: history },
       row?.token ?? null,
       false,
+      peopleChange,
     );
     this.committed(
       id,
@@ -194,8 +274,7 @@ export class CommandService {
       history,
     );
   }
-  clone(source: Snapshot) {
-    const ids = new Map<string, string>();
+  clone(source: Snapshot, ids = new Map<string, string>()) {
     for (const value of [
       source.project,
       ...source.stages,
@@ -204,6 +283,7 @@ export class CommandService {
       ...source.tasks,
       ...source.checkpoints,
       ...source.results,
+      ...source.assignments,
     ])
       ids.set(value.id, this.id());
     // Replace UUID values only, never text that happens to contain an ID.
@@ -212,6 +292,8 @@ export class CommandService {
       "projectId",
       "stageId",
       "resultId",
+      "targetId",
+      "personId",
       "processId",
       "laneId",
       "expandedProcessIds",
@@ -238,10 +320,11 @@ export class CommandService {
     return d;
   }
   async snapshot() {
-    const [documents, preferences, views] = await Promise.all([
+    const [documents, preferences, views, catalog] = await Promise.all([
       this.repository.all(),
       this.repository.preferences(),
       this.repository.views(),
+      this.repository.loadCatalog(),
     ]);
     const historyIssues: string[] = [];
     await Promise.all(
@@ -254,7 +337,7 @@ export class CommandService {
           historyIssues.push(`${d.project.name}: ${HISTORY_CONFLICT}`);
       }),
     );
-    return { documents, preferences, views, historyIssues };
+    return { documents, preferences, views, catalog, historyIssues };
   }
   saveView(id: ProjectId, view: ViewPreferences) {
     return this.repository.saveView(id, view);
@@ -271,6 +354,10 @@ export class CommandService {
         exportedAt: this.now(),
         documents: snapshot.documents,
         preferences: snapshot.preferences,
+        catalog: {
+          people: snapshot.catalog.people,
+          retiredAssignments: snapshot.catalog.retiredAssignments,
+        },
       }),
       null,
       2,
@@ -288,16 +375,94 @@ export class CommandService {
   }
   async importBackup(backup: V2Backup, copies: boolean) {
     const parsed = v2BackupSchema.parse(backup);
-    await this.repository.insertBatch(
-      copies ? parsed.documents.map((d) => this.clone(d)) : parsed.documents,
-      parsed.preferences,
-    );
+    const catalog = await this.repository.loadCatalog(),
+      ids = new Map<string, string>(),
+      people = [...catalog.people];
+    for (const person of parsed.catalog?.people ?? []) {
+      if (person.workspaceId !== WORKSPACE_ID)
+        throw Error("Чужое пространство в справочнике");
+      const present = people.find((p) => p.id === person.id);
+      if (present && !samePerson(present, person)) {
+        if (!copies)
+          throw Error(
+            "Общие карточки различаются. Импортируйте как копии, чтобы сохранить обе",
+          );
+        const id = this.id();
+        ids.set(person.id, id);
+        people.push({ ...person, id, revision: 0 });
+      } else if (!present) people.push(person);
+    }
+    if (
+      people.filter((p) => !p.archivedAt).length > 100 &&
+      people.filter((p) => !p.archivedAt).length >
+        catalog.people.filter((p) => !p.archivedAt).length
+    )
+      throw Error("Лимит: 100 активных исполнителей");
+    if (copies)
+      for (const r of parsed.catalog?.retiredAssignments ?? [])
+        if (!ids.has(r.assignmentId)) ids.set(r.assignmentId, this.id());
+    const documents = copies
+      ? parsed.documents.map((d) => this.clone(d, ids))
+      : parsed.documents;
+    if (
+      documents.some((d) =>
+        d.assignments.some(
+          (a) => a.personId && !people.some((p) => p.id === a.personId),
+        ),
+      )
+    )
+      throw Error(
+        "В бэкапе отсутствует общая карточка назначения. Данные не изменены",
+      );
+    const retired = [...catalog.retiredAssignments];
+    for (const r of parsed.catalog?.retiredAssignments ?? []) {
+      if (!parsed.documents.some((d) => d.project.id === r.projectId)) continue;
+      const value = copies
+        ? {
+            ...r,
+            assignmentId: ids.get(r.assignmentId) ?? r.assignmentId,
+            projectId: ids.get(r.projectId) ?? r.projectId,
+            targetId: ids.get(r.targetId) ?? r.targetId,
+            personId: ids.get(r.personId) ?? r.personId,
+          }
+        : r;
+      const present = retired.find(
+        (x) => x.assignmentId === value.assignmentId,
+      );
+      if (present && JSON.stringify(present) !== JSON.stringify(value))
+        throw Error("Конфликт служебных записей назначения");
+      if (!present) retired.push(retiredAssignmentSchema.parse(value));
+    }
+    const changed =
+      JSON.stringify(people) !== JSON.stringify(catalog.people) ||
+      JSON.stringify(retired) !== JSON.stringify(catalog.retiredAssignments);
+    await this.repository.insertBatch(documents, parsed.preferences, {
+      expectedRevision: catalog.revision,
+      ...(changed
+        ? {
+            next: catalogSchema.parse({
+              ...catalog,
+              revision: catalog.revision + 1,
+              people,
+              retiredAssignments: retired,
+            }),
+          }
+        : {}),
+    });
   }
   async duplicate(id: string) {
     const source = await this.repository.load(id);
     if (!source) throw new RevisionConflict();
-    const d = this.clone(source);
-    await this.repository.insertBatch([d]);
+    const catalog = await this.repository.loadCatalog();
+    const d = this.clone({
+      ...source,
+      assignments: source.assignments.filter((a) =>
+        activeAssignment(a, catalog),
+      ),
+    });
+    await this.repository.insertBatch([d], undefined, {
+      expectedRevision: catalog.revision,
+    });
     return d.project.id;
   }
 }

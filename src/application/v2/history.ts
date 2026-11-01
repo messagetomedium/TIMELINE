@@ -1,9 +1,11 @@
+import { personSchema } from "../../domain/v2/peopleModel";
 import { z } from "zod";
 import { snapshotSchema } from "../../domain/v2/model";
 import type { Snapshot } from "../../domain/v2/model";
 const entrySchema = z.strictObject({
   before: snapshotSchema,
   after: snapshotSchema,
+  createdPerson: personSchema.optional(),
 });
 export const localHistorySchema = z.strictObject({
   version: z.literal(1),
@@ -24,12 +26,18 @@ export interface StoredHistory {
 export const historyKey = (id: string) => `current:${id}`;
 export function fingerprint(d: Snapshot) {
   return JSON.stringify(d, (key, value: unknown) =>
-    key === "viewPreferences" ? undefined : value,
+    key === "viewPreferences" ||
+    (key === "assignments" && Array.isArray(value) && value.length === 0)
+      ? undefined
+      : value,
   );
 }
 export function semantic(d: Snapshot) {
   return JSON.stringify(d, (key, value: unknown) =>
-    key === "viewPreferences" || key === "revision" || key === "updatedAt"
+    key === "viewPreferences" ||
+    key === "revision" ||
+    key === "updatedAt" ||
+    (key === "assignments" && Array.isArray(value) && value.length === 0)
       ? undefined
       : value,
   );

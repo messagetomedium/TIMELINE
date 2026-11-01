@@ -1,3 +1,5 @@
+import { CalendarShading } from './CalendarShading';
+import type { CalendarArea } from './CalendarShading';
 import type { PointerEvent } from 'react';
 import type { DateOnly, ProjectDocument, StageMarkerId } from '../../domain';
 import type { CalendarGeometry } from '../../domain/calendar';
@@ -9,8 +11,9 @@ function position(x:number, width:number, viewport:number) {
  const inset=Math.max(0,-x);
  return {left:x,width,inset,available:Math.max(0,Math.min(width-inset,viewport-Math.max(0,x)))};
 }
-export function CalendarRuler({camera,width,calendar,today}:{readonly camera:TimelineCamera;readonly width:number;readonly calendar:CalendarGeometry;readonly today:DateOnly}) {
+export function CalendarRuler({camera,width,calendar,today,area}:{readonly camera:TimelineCamera;readonly width:number;readonly calendar:CalendarGeometry;readonly today:DateOnly;readonly area?:CalendarArea|undefined}) {
  return <div className="calendar-ruler" aria-label="Календарная шкала">
+  <CalendarShading area={area} camera={camera} height={80}/>
   {calendar.months.flatMap(month=>timeFragments({startDate:month.start,endDateExclusive:month.endExclusive},camera).map(f=>{
    const p=position(f.x,f.width,width),full=`${month.label} ${month.secondaryLabel}`,short=`${month.shortLabel} ${month.secondaryLabel}`;
    const label=p.available>=full.length*6.5+18?full:p.available>=short.length*6.5+14?short:'';
@@ -25,8 +28,9 @@ export function CalendarRuler({camera,width,calendar,today}:{readonly camera:Tim
  </div>;
 }
 
-export function TimeGrid({ camera, width, height, calendar, weekends }: { readonly camera: TimelineCamera; readonly width: number; readonly height: number; readonly calendar: CalendarGeometry; readonly weekends: boolean }) {
+export function TimeGrid({ camera, width, height, calendar, weekends,area }: { readonly camera: TimelineCamera; readonly width: number; readonly height: number; readonly calendar: CalendarGeometry; readonly weekends: boolean;readonly area?:CalendarArea|undefined }) {
   return <svg className="time-grid" width={width} height={height} aria-hidden="true">
+    {area&&<g><CalendarShading area={area} camera={camera} height={height}/></g>}
     {weekends && calendar.weekends.map((day) => <rect className="weekend-shade" data-date={day} key={day} x={xForDate(day, camera)} y={0} width={camera.pxPerDay} height="100%" />)}
     {calendar.cells.map((cell) => <line className="calendar-column-line" data-date={cell.start} key={cell.start} x1={xForDate(cell.start, camera)} x2={xForDate(cell.start, camera)} y1={0} y2="100%" />)}
     {calendar.months.map((month) => <line className="calendar-month-line" data-date={month.start} key={month.start} x1={xForDate(month.start, camera)} x2={xForDate(month.start, camera)} y1={0} y2="100%" />)}
