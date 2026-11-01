@@ -42,6 +42,15 @@ Track implementation readiness (`planned`, `in_progress`, `ready_for_review`, `b
 
 Never put production passwords, SMTP keys, DB connection strings, real guest/invitation tokens, or private project exports in this repository, PR comments, screenshots, or chat. Deployment instructions use placeholders and provider secret settings.
 
+## Token-efficient development
+
+- Read only task-relevant files and documentation; prefer targeted search over full repository exploration.
+- Make the smallest correct change using the existing architecture; avoid unsolicited refactoring, dependencies and extra features.
+- Run focused local tests and rely on existing CI for full validation. Do not repeat successful checks without changed inputs or a concrete unresolved concern.
+- Do not generate screenshots, videos, lengthy reports or unnecessary documents. Keep final reports short.
+- Do not start another milestone without explicit authorization. Never sacrifice data safety or essential correctness to save tokens.
+
 ## Existing checks
+
 
 Use the Node version from `.nvmrc` and the lockfile. Current scripts: `npm ci`, `npm run lint`, `npm run build`, `npm run test`, `npm run test:e2e`. For critical browser changes run the relevant behavioral scenarios; in the current suite use `npm run test:e2e -- --grep-invert 'captures'` to exclude the two explicit screenshot-capture scenarios. In this cloud environment set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium` and use `--workers=2`. This exclusion implements the user's visual-artifact rule; do not disable behavioral assertions. Build precedes Playwright preview; reuse a valid build when its inputs are unchanged. Install the documented browser dependencies only in the test environment. Add WebKit checks in the scheduled browser-compatibility task, not as a claim that an actual iPhone was tested.
