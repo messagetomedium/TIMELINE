@@ -72,3 +72,5 @@ button:disabled { cursor:wait; opacity:.55; }
 .empty-editor-note h2 { font-size:20px; margin-bottom:12px; }
 .empty-editor-note p { font-size:12px; color:#8b96a2; line-height:1.7; }
 @media (max-width:800px) { .projects-heading { padding:24px 18px; flex-wrap:wrap; } .projects-title-row { gap:15px; flex-wrap:wrap; } .projects-storage { padding:0 18px 18px; align-items:flex-start; flex-direction:column; } .project-card-grid { padding:0 18px 24px; } .portfolio.timeline-surface { margin:0 10px 10px; --gutter-width:180px; } .workspace-label { display:none; } }
+
+.portfolio-order-handle { flex: 0 0 24px; width: 24px; padding: 0; border: 0; background: transparent; color: inherit; cursor: ns-resize; touch-action: none; }

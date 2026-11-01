@@ -9,5 +9,6 @@ export const v2BackupSchema = z.strictObject({
   documents: z.array(snapshotSchema),
   preferences: workspacePreferencesSchema,
   catalog: catalogDataSchema.optional(),
+  portfolioOrder: z.array(z.uuid()).refine((ids) => new Set(ids).size === ids.length).optional(),
 });
 export type V2Backup = z.infer<typeof v2BackupSchema>;

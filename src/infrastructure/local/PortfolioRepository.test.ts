@@ -1,0 +1,114 @@
+import { required } from "../../testing/required";
+import "fake-indexeddb/auto";
+import { Dexie } from "dexie";
+import { afterEach, expect, it, vi } from "vitest";
+import { V2Database, V2Repository } from "./V2Repository";
+import { CommandService } from "../../application/v2/CommandService";
+import { dateOnly } from "../../domain";
+import { createTemplate } from "../../domain/v2/template";
+import { portfolioFixture } from "../../testing/portfolioFixture";
+import { emptyCatalog } from "../../domain/v2/peopleModel";
+import { newPerson } from "../../domain/v2/people";
+import { semantic } from "../../application/v2/history";
+import { WORKSPACE_ID } from "../../domain/v2/model";
+const databases: V2Database[] = [];
+function setup() {
+  const db = new V2Database(`portfolio-${crypto.randomUUID()}`); databases.push(db);
+  const repo = new V2Repository(db), service = new CommandService(repo);
+  return { db, repo, service };
+}
+afterEach(async () => { for (const db of databases.splice(0)) await db.delete(); });
+const template = (name = "Проект") => createTemplate(name, "", dateOnly("2026-11-02"), () => crypto.randomUUID(), new Date().toISOString());
+it("archives/restores atomically, preserves project history and newer content through independent workspace Undo/Redo", async () => {
+  const { db, repo, service } = setup(), d = template();
+  const catalog = emptyCatalog(WORKSPACE_ID), person = newPerson(catalog, crypto.randomUUID(), { firstName:"Общий", lastName:"", defaultRole:"", contacts:"", note:"" });
+  catalog.people.push(person); await db.workspaceData.put({ key:"people", value:catalog });
+  d.assignments.push({ id:crypto.randomUUID(), workspaceId:WORKSPACE_ID, projectId:d.project.id, kind:"process", targetId:required(d.processes[0]).id, personId:person.id, roleLabel:"Лид", personSnapshot:"Общий", revision:0 });
+  await repo.insertBatch([d]);
+  await service.execute(service.envelope(d, { type: "Rename", kind: "project", id: d.project.id, value: "Изменён" }));
+  const before = await repo.load(d.project.id);
+  const archive = await service.portfolioCommand((await repo.loadPortfolio()).revision, { type: "ArchiveProject", id: d.project.id, archived: true });
+  expect((await repo.load(d.project.id))?.project.archivedAt).toBeTruthy();
+  await service.undo(d.project.id);
+  expect((await repo.load(d.project.id))?.project.name).toBe(d.project.name);
+  expect((await repo.load(d.project.id))?.project.archivedAt).toBeTruthy();
+  await service.portfolioCommand(archive.revision, "undo");
+  expect((await repo.load(d.project.id))?.project.archivedAt).toBeNull();
+  await service.undo(d.project.id, true);
+  expect(semantic(required(await repo.load(d.project.id)))).toBe(semantic(required(before)));
+  db.close();
+  const reopened = new V2Database(db.name);
+  try {
+    const fresh = new CommandService(new V2Repository(reopened));
+    await fresh.portfolioCommand((await fresh.repository.loadPortfolio()).revision, "redo");
+    expect((await fresh.repository.load(d.project.id))?.project.archivedAt).toBeTruthy();
+    await fresh.portfolioCommand((await fresh.repository.loadPortfolio()).revision, { type: "ArchiveProject", id: d.project.id, archived: false });
+    expect(semantic(required(await fresh.repository.load(d.project.id)))).toBe(semantic(required(before)));
+  } finally { reopened.close(); }
+});
+it("rejects stale portfolio writes, full-limit restoration, and storage failure without changing documents or histories", async () => {
+  const { db, repo, service } = setup(), first = template();
+  await repo.insertBatch([first]);
+  const state = await repo.loadPortfolio();
+  await service.portfolioCommand(state.revision, { type: "ArchiveProject", id: first.project.id, archived: true });
+  await expect(service.portfolioCommand(state.revision, "undo")).rejects.toThrow();
+  await repo.insertBatch(Array.from({ length: 40 }, () => template()));
+  const before = await repo.load(first.project.id), h = await repo.loadHistory(first.project.id), p = await repo.loadPortfolio();
+  await expect(service.portfolioCommand(p.revision, { type: "ArchiveProject", id: first.project.id, archived: false })).rejects.toThrow("40");
+  expect(await repo.load(first.project.id)).toEqual(before); expect(await repo.loadHistory(first.project.id)).toEqual(h); expect(await repo.loadPortfolio()).toEqual(p);
+  const target = required((await repo.summaries()).find((d) => !d.project.archivedAt));
+  const prior = await repo.load(target.project.id);
+  const spy = vi.spyOn(db.summaries, "put").mockRejectedValueOnce(Error("denied"));
+  await expect(service.portfolioCommand(p.revision, { type: "ArchiveProject", id: target.project.id, archived: true })).rejects.toThrow("denied");
+  spy.mockRestore(); expect(await repo.load(target.project.id)).toEqual(prior); expect(await repo.loadPortfolio()).toEqual(p);
+});
+it("reorders once without content edits, keeps no-op Redo and newly created projects, and round-trips order/archives in JSON", async () => {
+  const { repo, service } = setup(), a = template("А"), b = template("Б");
+  await repo.insertBatch([a,b]);
+  const docs = await repo.all(), state = await repo.loadPortfolio();
+  await service.portfolioCommand(state.revision, { type: "ReorderProjects", order: [b.project.id,a.project.id] });
+  expect(await repo.all()).toEqual(docs);
+  await service.portfolioCommand((await repo.loadPortfolio()).revision, "undo");
+  const undone = await repo.loadPortfolio();
+  await service.portfolioCommand(undone.revision, { type: "ReorderProjects", order: [a.project.id,b.project.id] });
+  expect(await repo.loadPortfolio()).toEqual(undone);
+  const c = template("В"); await repo.insertBatch([c]);
+  await service.portfolioCommand((await repo.loadPortfolio()).revision, "redo");
+  expect((await repo.loadPortfolio()).order).toEqual([c.project.id,b.project.id,a.project.id]);
+  await service.portfolioCommand((await repo.loadPortfolio()).revision, { type: "ArchiveProject", id:a.project.id, archived:true });
+  const backup = (await service.previewImport(await service.exportBackup())).backup;
+  const target = setup(); await target.service.importBackup(backup, false);
+  expect((await target.repo.loadPortfolio()).order).toEqual((await repo.loadPortfolio()).order);
+  expect(await target.repo.all()).toEqual(await repo.all());
+  await target.service.importBackup(backup, true);
+  expect((await target.repo.summaries()).length).toBe(6);
+});
+it("measures one bounded 40-project / 4000-task dataset and loads only summaries at home and one detail on opening", async () => {
+  const { repo, service, db } = setup();
+  const big = portfolioFixture();
+  await repo.insertBatch([...Array.from({length:39}, () => template()), big]);
+  const catalog = emptyCatalog(WORKSPACE_ID);
+  catalog.people = Array.from({length:100}, (_,i) => newPerson(catalog, crypto.randomUUID(), { firstName:`Человек ${String(i)}`, lastName:"", defaultRole:"", contacts:"", note:"" }));
+  await db.workspaceData.put({ key:"people", value:catalog });
+  const start = performance.now(), baseline = await service.snapshot(), baselineMs = performance.now()-start;
+  const all = vi.spyOn(repo,"all"), load = vi.spyOn(repo,"load"), history = vi.spyOn(repo,"loadHistory");
+  const t = performance.now(), home = await service.screen(null), homeMs = performance.now()-t;
+  expect(home.documents).toHaveLength(40); expect(home.catalog.people).toHaveLength(100); expect(home.active).toBeNull();
+  expect(all).not.toHaveBeenCalled(); expect(load).not.toHaveBeenCalled(); expect(history).not.toHaveBeenCalled();
+  const o = performance.now(), opened = await service.screen(big.project.id), openMs = performance.now()-o;
+  expect(load).toHaveBeenCalledTimes(1); expect(history).toHaveBeenCalledTimes(1); expect(all).not.toHaveBeenCalled(); expect(opened.active?.tasks).toHaveLength(4000);
+  process.stdout.write(JSON.stringify({ baselineMs, homeMs, openMs, fullBytes:JSON.stringify(baseline.documents).length, summaryBytes:JSON.stringify(home.documents).length }) + "\n");
+});
+
+it("adds the summary table to a v4 database without changing documents, views, catalog or stored history", async () => {
+  const name = `migration-${crypto.randomUUID()}`, old = new Dexie(name), d = template();
+  old.version(4).stores({ documents:"&project.id,project.updatedAt", preferences:"&key", history:"&key", workspaceData:"&key" });
+  await old.table("documents").put(d);
+  await old.table("preferences").put({ key:"editor:"+d.project.id, value:d.viewPreferences });
+  await old.table("history").put({ key:"opaque-old", token:"unchanged", value:{ preserve:true } });
+  old.close(); const db = new V2Database(name); databases.push(db); const repo = new V2Repository(db);
+  expect(await repo.summaries()).toEqual([{ project:d.project }]);
+  expect(await repo.load(d.project.id)).toEqual(d);
+  expect((await repo.views())[d.project.id]).toEqual(d.viewPreferences);
+  expect(await db.history.get("opaque-old")).toEqual({ key:"opaque-old", token:"unchanged", value:{ preserve:true } });
+});

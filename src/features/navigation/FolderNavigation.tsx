@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { Snapshot } from "../../domain/v2/model";
+import type { ProjectSummary } from "../../application/v2/portfolio";
 /** One route and one source of projects, shared by home and the editor. */
 export function FolderNavigation({
   documents,
@@ -8,7 +8,7 @@ export function FolderNavigation({
   onHome,
   onOpen,
 }: {
-  documents: readonly Snapshot[];
+  documents: readonly ProjectSummary[];
   activeId: string | null;
   home: boolean;
   onHome: () => void;

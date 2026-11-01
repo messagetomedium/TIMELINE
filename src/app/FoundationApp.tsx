@@ -1,3 +1,5 @@
+import { emptyPortfolio, summaryDocument } from "../application/v2/portfolio";
+import type { ProjectSummary } from "../application/v2/portfolio";
 import { PeopleCatalog } from "../features/timeline/PeopleUI";
 import { emptyCatalog } from "../domain/v2/peopleModel";
 import { WORKSPACE_ID } from "../domain/v2/model";
@@ -8,7 +10,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { dateOnly, projectIdSchema } from "../domain";
 import type { ProjectId, ViewPreferences } from "../domain";
 import type { Snapshot } from "../domain/v2/model";
-import { displayDocument } from "../domain/v2/model";
+
 import { CommandService } from "../application/v2/CommandService";
 import { FoundationTimeline } from "../features/timeline/FoundationTimeline";
 import { ProjectsPage } from "../features/projects/ProjectsPage";
@@ -38,7 +40,7 @@ function selectedId() {
 export function FoundationApp({ service }: { service: CommandService }) {
   const [catalog, setCatalog] = useState(() => emptyCatalog(WORKSPACE_ID)),
     [peopleOpen, setPeopleOpen] = useState(false);
-  const [documents, setDocuments] = useState<Snapshot[] | null>(null),
+  const [documents, setDocuments] = useState<ProjectSummary[] | null>(null),
     [preferences, setPreferences] = useState(defaultPreferences),
     [views, setViews] = useState<Record<string, ViewPreferences>>({});
   const [id, setId] = useState(selectedId),
@@ -47,12 +49,23 @@ export function FoundationApp({ service }: { service: CommandService }) {
     [legacy, setLegacy] = useState(false),
     [busy, setBusy] = useState(false),
     [pending, setPending] = useState(0);
-  const [dialog, setDialog] = useState<"new" | Snapshot | null>(null);
+  const [detail, setActive] = useState<Snapshot | null>(null),
+    [loadedId, setLoadedId] = useState<string | null>(null),
+    [portfolio, setPortfolio] = useState(emptyPortfolio);
+  const active = detail?.project.id === id ? detail : null;
+  const [dialog, setDialog] = useState<"new" | ProjectSummary | null>(null);
   const writing = useRef(0),
     operations = useRef(Promise.resolve()),
-    queue = useRef(Promise.resolve());
+    queue = useRef(Promise.resolve()),
+    reading = useRef(0);
   const refresh = useCallback(async () => {
-    const s = await service.snapshot();
+    const token = ++reading.current;
+    const requestedId = selectedId() ?? null;
+    const s = await service.screen(requestedId);
+    if (token !== reading.current) return;
+    setActive(s.active);
+    setLoadedId(requestedId);
+    setPortfolio(s.portfolio);
     setDocuments(s.documents);
     setCatalog(s.catalog);
     setPreferences(s.preferences);
@@ -69,6 +82,7 @@ export function FoundationApp({ service }: { service: CommandService }) {
     void hasLegacyData().then(setLegacy).catch(report);
     const listener = () => {
       setId(selectedId());
+      void refresh().catch(report);
     };
     window.addEventListener("hashchange", listener);
     return () => {
@@ -109,12 +123,14 @@ export function FoundationApp({ service }: { service: CommandService }) {
         command,
       }),
     );
-  const active = documents?.find((d) => d.project.id === id);
+
   const undo = useCallback(
     (redo = false) => {
+      if (id && !active) return;
       if (active) void run(() => service.undo(active.project.id, redo));
+      else void run(() => service.portfolioCommand(portfolio.revision, redo ? "redo" : "undo"));
     },
-    [active, run, service],
+    [id, active, portfolio.revision, run, service],
   );
   useEffect(() => {
     const listener = (e: KeyboardEvent) => {
@@ -131,7 +147,7 @@ export function FoundationApp({ service }: { service: CommandService }) {
       if (peopleOpen) {
         e.preventDefault();
         void run(() => service.peopleUndo(catalog.revision, e.shiftKey));
-      } else if (active) {
+      } else {
         e.preventDefault();
         undo(e.shiftKey);
       }
@@ -267,7 +283,7 @@ export function FoundationApp({ service }: { service: CommandService }) {
       ) : (
         <div className="app-content" aria-busy={busy}>
           {id ? (
-            active ? (
+            loadedId !== id ? <main className="workspace-loading">Открываем проект…</main> : active ? (
               <FoundationTimeline
                 key={id}
                 snapshot={active}
@@ -308,7 +324,12 @@ export function FoundationApp({ service }: { service: CommandService }) {
             )
           ) : (
             <ProjectsPage
-              documents={documents.map(displayDocument)}
+              documents={documents.map(summaryDocument)}
+              summaries={documents}
+              portfolio={portfolio}
+              onPortfolio={(command) => { void run(() => service.portfolioCommand(portfolio.revision, command)); }}
+              onUndo={(redo) => { undo(redo); }}
+              onDelete={(d) => { void run(() => service.portfolioCommand(portfolio.revision, { type: "ArchiveProject", id: d.project.id, archived: true })); }}
               preferences={preferences}
               onPreferences={savePreferences}
               onOpen={(projectId) => {
@@ -324,15 +345,7 @@ export function FoundationApp({ service }: { service: CommandService }) {
                 void run(() => service.duplicate(d.project.id));
               }}
               onShift={(projectId, days, revision) => {
-                void run(() =>
-                  service.execute({
-                    ...service.envelope(source(projectId), {
-                      type: "ShiftProject",
-                      days,
-                    }),
-                    expectedRevision: revision,
-                  }),
-                );
+                void run(() => service.projectCommand(projectId, { type: "ShiftProject", days }, revision));
               }}
               onExport={() => service.exportBackup()}
               onPreviewImport={previewImport}
@@ -378,14 +391,10 @@ export function FoundationApp({ service }: { service: CommandService }) {
                     multiline={field === "description"}
                     onCommit={(value) => {
                       void run(() =>
-                        service.executeLocal(
-                          service.envelope(d, {
-                            type: field === "name" ? "Rename" : "Describe",
-                            kind: "project",
-                            id: d.project.id,
-                            value,
-                          }),
-                        ),
+                        service.projectCommand(d.project.id, {
+                          type: field === "name" ? "Rename" : "Describe",
+                          kind: "project", id: d.project.id, value,
+                        }, d.project.revision, true),
                       );
                     }}
                   />
