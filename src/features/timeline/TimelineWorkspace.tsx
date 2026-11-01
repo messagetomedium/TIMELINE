@@ -1,3 +1,4 @@
+import { DateRange } from "../projects/DateRange";
 import { barGeometry } from '../../domain/barGeometry';
 import type { SceneBar } from '../../domain/barGeometry';
 import type { CalendarArea } from './CalendarShading';
@@ -157,6 +158,10 @@ export function TimelineWorkspace({ document, onCommit, initialView, onViewChang
   return <main className={`timeline-workspace ${foundation?.inspectorCollapsed?'inspector-collapsed':''}`} aria-label="Редактор таймлайна" data-project-revision={document.project.revision} data-px-per-day={camera.pxPerDay} data-pan-x={camera.panX}>
     <div className={`timeline-surface ${gesture.active ? `gesture-${gesture.active}` : ''} ${gesture.invalid ? 'invalid-gesture' : ''}`} ref={surface}
       onPointerDown={gesture.startPan} onPointerMove={gesture.onPointerMove} onPointerUp={gesture.onPointerUp} onPointerCancel={gesture.onPointerCancel} onLostPointerCapture={gesture.onLostPointerCapture}>
+      <header className="editor-heading" data-interactive>
+        <div><p className="eyebrow">Рабочий проект</p><h1 title={document.project.name}>{document.project.name}</h1></div>
+        <DateRange value={document.project} />
+      </header>
       <div className="calendar-row"><div className="calendar-gutter section-gutter" data-interactive><strong>Календарь</strong><span>{visibleYears(calendar.range)}</span></div>
         <div className="calendar-time" ref={timeViewport}><CalendarRuler camera={sceneCamera} width={width} calendar={calendar} today={today} area={area}/></div>
       </div>

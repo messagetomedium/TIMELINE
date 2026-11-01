@@ -1,14 +1,90 @@
+/* Manrope 5.3.0, original WOFF2 subsets; SIL OFL 1.1 in public/fonts/Manrope-OFL.txt. */
+@font-face {
+  font-family: "Manrope"; font-style: normal; font-weight: 200 800; font-display: swap;
+  src: url("../../public/fonts/manrope-cyrillic-wght-normal.woff2") format("woff2");
+  unicode-range: U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116;
+}
+@font-face {
+  font-family: "Manrope"; font-style: normal; font-weight: 200 800; font-display: swap;
+  src: url("../../public/fonts/manrope-latin-wght-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF,U+FEFF,U+FFFD;
+}
 :root {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: #242d28;
-  background: #f6f5f1;
+  color-scheme: light;
+  --tl-blue-ikb: #002fa7;
+  --tl-blue-digital: #2457ff;
+  --tl-ink: #0a0a0a;
+  --tl-orange: #ff6a00;
+  --tl-white: #fff;
+  --tl-paper: #fafafc;
+  --tl-muted: #64666d;
+  --tl-hairline: rgb(10 10 10 / 15%);
+  --tl-line-strong: rgb(10 10 10 / 62%);
+  --tl-blue-wash: rgb(0 47 167 / 7%);
+  --tl-blue-glow: rgb(36 87 255 / 16%);
+  --tl-orange-glow: rgb(255 106 0 / 12%);
+  --tl-danger: #a92f22;
+  --tl-danger-wash: #fff3ef;
+  --tl-danger-hover: #86271e;
+  --tl-danger-line: rgb(169 47 34 / 25%);
+  --tl-tab-idle: #f0f1f5;
+  --tl-warm-ink: #9a3f00;
+  --tl-warning-wash: #fff6eb;
+  --tl-backdrop: rgb(10 10 10 / 24%);
+  --tl-checkpoint: #c13f24;
+  --tl-checkpoint-wash: rgb(193 63 36 / 9%);
+  --tl-weekend: #edf3ed;
+  --tl-font: "Manrope", "Segoe UI", Arial, sans-serif;
+  --tl-micro: 11px;
+  --tl-small: 12px;
+  --tl-body: 14px;
+  --tl-display: clamp(64px, 6.25vw, 96px);
+  --tl-project-title: clamp(32px, 2.25vw, 40px);
+  --tl-editor-heading-height: 64px;
+  --tl-space-1: 4px;
+  --tl-space-2: 8px;
+  --tl-space-3: 12px;
+  --tl-space-4: 16px;
+  --tl-space-6: 24px;
+  --tl-space-8: 32px;
+  --tl-space-12: 48px;
+  --tl-space-16: 64px;
+  --tl-radius-field: 12px;
+  --tl-radius-bar: 8px;
+  --tl-radius-card: 20px;
+  --tl-radius-sheet: 26px;
+  --tl-border: 1px solid var(--tl-hairline);
+  --tl-shadow-soft: 0 10px 36px rgb(10 10 10 / 8%);
+  --tl-shadow-float: 0 8px 24px rgb(0 47 167 / 9%);
+  --tl-shadow-modal: 0 24px 80px rgb(10 10 10 / 16%);
+  --tl-motion: 160ms ease;
+  --tl-z-decoration: 0;
+  --tl-z-menu: 30;
+  --tl-z-modal: 60;
+  --tl-z-notice: 100;
+  font-family: var(--tl-font);
+  font-size: var(--tl-body);
+  color: var(--tl-ink);
+  background: var(--tl-paper);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  --surface: #fffefa;
-  --ink-muted: #647068;
-  --line: #dedfd7;
-  --accent: #365c49;
-  --accent-soft: #e7ece4;
-  --radius: 12px;
+  /* Compatibility aliases for existing surfaces. */
+  --surface: var(--tl-white);
+  --ink-muted: var(--tl-muted);
+  --line: var(--tl-hairline);
+  --accent: var(--tl-blue-ikb);
+  --accent-soft: var(--tl-blue-wash);
+  --radius: var(--tl-radius-card);
 }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; }
+button, a { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+button, input, textarea, select { font: inherit; }
+button { cursor: pointer; }
+h1, h2, h3, p { margin: 0; }
+h1, h2, h3 { color: var(--tl-ink); }
+h1 { font-size: var(--tl-display); font-weight: 800; line-height: 1; letter-spacing: -.065em; }
+h2 { font-size: 26px; font-weight: 800; letter-spacing: -.045em; }
+h3 { font-size: 16px; font-weight: 750; letter-spacing: -.025em; }
+::selection { background: var(--tl-blue-ikb); color: var(--tl-white); }

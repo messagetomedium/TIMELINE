@@ -220,6 +220,7 @@ export function FoundationApp({ service }: { service: CommandService }) {
         >
           Исполнители
         </button>
+        <div className="product-signature" aria-label="TIMELINE">TIME<span>LINE</span><i aria-hidden="true" /></div>
         <span
           className="workspace-label"
           role="status"
