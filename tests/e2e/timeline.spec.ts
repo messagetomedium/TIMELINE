@@ -79,17 +79,36 @@ test("checkpoint title, free date, anchor, note and undo/redo persist correctly"
   await page
     .getByRole("button", { name: "Чекпойнт: Дедлайн", exact: true })
     .click();
+  const before = await current(page);
   await page.getByLabel("Название", { exact: true }).fill("Сдача");
-  await page.getByLabel("Дата чекпойнта").fill("2026-11-20");
+  await page.getByLabel("Название", { exact: true }).press("Enter");
+  await saved(page);
+  const renamed = await current(page);
+  expect(renamed.project.revision).toBe(before.project.revision + 1);
+  const date = page.getByLabel("Дата чекпойнта");
+  await date.focus();
+  await date.press("ArrowLeft");
+  await date.fill("2026-11-19");
+  expect(await current(page)).toEqual(renamed);
+  await date.press("Enter");
+  await date.blur();
+  await saved(page);
+  const dated = await current(page);
+  expect(dated.project.revision).toBe(renamed.project.revision + 1);
+  await date.focus();
+  await date.press("ArrowLeft");
+  await date.fill("2026-11-20");
+  await date.blur();
+  await saved(page);
+  expect((await current(page)).project.revision).toBe(dated.project.revision + 1);
   await page.getByLabel("Заметка", { exact: true }).fill("Проверить");
-  await page.getByRole("button", { name: "Сохранить чекпойнт" }).click();
+  await page.getByLabel("Заметка", { exact: true }).press("Tab");
   await saved(page);
   await expect(page.locator(".timeline-canvas .checkpoint-line")).toHaveAttribute(
     "data-date",
     "2026-11-20",
   );
   await page.getByLabel("Привязать к дате окончания проекта").check();
-  await page.getByRole("button", { name: "Сохранить чекпойнт" }).click();
   await saved(page);
   await expect(page.locator(".timeline-canvas .checkpoint-line")).toHaveAttribute(
     "data-date",

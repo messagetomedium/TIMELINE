@@ -33,11 +33,7 @@ async function applyDate(page: Page, label: string, date: string) {
     await saved(page);
     return;
   }
-  await field
-    .locator("..")
-    .locator("..")
-    .getByRole("button", { name: "Применить", exact: true })
-    .click();
+  await field.press("Enter");
   await saved(page);
 }
 async function stage(page: Page, name = "Этап 1") {
@@ -213,7 +209,6 @@ test("boundary slack exhausts minimally and anchor follows the new project end; 
     .getByRole("button", { name: "Чекпойнт: Дедлайн", exact: true })
     .click();
   await page.getByLabel("Привязать к дате окончания проекта").check();
-  await page.getByRole("button", { name: "Сохранить чекпойнт" }).click();
   await saved(page);
   const d = await current(page);
   await page.getByLabel("Шаг", { exact: true }).selectOption("1d");

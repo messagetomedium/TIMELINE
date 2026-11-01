@@ -10,8 +10,8 @@ import { CalendarShading } from "./CalendarShading";
 import { DateRangeEditor } from "./DateRangeEditor";
 import { WorkActions, CreateWorkForm } from "./WorkActions";
 import type { WorkKind } from "../../domain/v2/work";
-import { useRef, useState } from "react";
-import { addDays, dateOnlySchema } from "../../domain";
+import { useEffect, useRef, useState } from "react";
+import { addDays } from "../../domain";
 import { displayDocument, checkpointDate } from "../../domain/v2/model";
 import type { Snapshot } from "../../domain/v2/model";
 import { RESULT_COLUMN_WIDTH } from "../../domain/SegmentAxis";
@@ -22,7 +22,7 @@ import { planCommand } from "../../domain/v2/commands";
 import type { Selection } from "../../application/timelineCommands";
 import type { ViewPreferences, ProjectId, StageMarkerId } from "../../domain";
 import { stageMarkerIdSchema } from "../../domain";
-import { InsertStageDialog, StageActions } from "./StageControls";
+import { DateCommandField, InsertStageDialog, StageActions } from "./StageControls";
 import type { StageBoundary, SendCommand } from "./StageControls";
 import { TimelineWorkspace } from "./TimelineWorkspace";
 import { layoutTimeline } from "../../application/timelineLayout";
@@ -608,7 +608,7 @@ function FoundationInspector({
               </select>
             </label>
             <DateRangeEditor
-              key={`work-range:${item.startDate}:${item.endDateExclusive}`}
+              key={`work-range:${target.id}`}
               start={item.startDate}
               endExclusive={item.endDateExclusive}
               heading="Сроки работы"
@@ -770,6 +770,7 @@ function FoundationInspector({
           <input
             type="checkbox"
             checked={snapshot.project.isScheduled}
+            onKeyDown={checkboxEnter}
             onChange={(e) => {
               void onCommand({
                 type: "SetProjectScheduled",
@@ -782,7 +783,7 @@ function FoundationInspector({
       )}
       {target.kind === "project" && (
         <DateRangeEditor
-          key={`project-range:${snapshot.project.startDate}:${snapshot.project.endDateExclusive}`}
+          key={`project-range:${target.id}`}
           start={snapshot.project.startDate}
           endExclusive={snapshot.project.endDateExclusive}
           apply={(startDate, endDateExclusive) =>
@@ -826,79 +827,61 @@ function CheckpointTiming({
   checkpoint: Snapshot["checkpoints"][number];
   onCommand: SendCommand;
 }) {
-  const [date, setDate] = useState<string>(
-      checkpointDate(snapshot, checkpoint),
-    ),
-    [anchor, setAnchor] = useState(checkpoint.timing.anchor === "project_end");
-  const original = JSON.stringify(checkpoint.timing),
-    submitted = useRef(original);
-  const timing = anchor
-    ? { anchor: "project_end" as const }
-    : { anchor: "free" as const, date: dateOnlySchema.safeParse(date).data };
-  const next = JSON.stringify(timing);
+  const anchor = checkpoint.timing.anchor === "project_end";
+  const [busy, setBusy] = useState(false), [error, setError] = useState(""),
+    [checked, setChecked] = useState(anchor);
+  const sending = useRef(false);
   return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (
-          next === original ||
-          next === submitted.current ||
-          (!anchor && !timing.date)
-        )
-          return;
-        submitted.current = next;
-        void onCommand({
-          type: "SetCheckpointTiming",
-          id: checkpoint.id,
-          timing: anchor
-            ? { anchor: "project_end" }
-            : { anchor: "free", date: dateOnlySchema.parse(date) },
-        }).then((ok) => {
-          if (!ok) submitted.current = original;
-        });
-      }}
-    >
-      <label className="inspector-label" htmlFor="checkpoint-date">
-        Дата чекпойнта
-      </label>
-      <input
-        id="checkpoint-date"
-        type="date"
-        min="0001-01-01"
-        max="9999-12-31"
-        disabled={anchor}
-        value={anchor ? addDays(snapshot.project.endDateExclusive, -1) : date}
-        onChange={(e) => {
-          setDate(e.target.value);
-        }}
+    <section>
+      <DateCommandField
+        key={checkpointDate(snapshot, checkpoint)}
+        label="Дата чекпойнта"
+        value={checkpointDate(snapshot, checkpoint)}
+        disabled={anchor || busy}
+        apply={(date) => onCommand({
+          type: "SetCheckpointTiming", id: checkpoint.id,
+          timing: { anchor: "free", date },
+        })}
       />
       <label className="checkbox-label">
         <input
           type="checkbox"
-          checked={anchor}
+          checked={checked}
+          disabled={busy}
+          onKeyDown={checkboxEnter}
           onChange={(e) => {
-            setAnchor(e.target.checked);
-            if (!e.target.checked)
-              setDate(checkpointDate(snapshot, checkpoint));
+            if (sending.current) return;
+            const timing = e.target.checked
+              ? { anchor: "project_end" as const }
+              : { anchor: "free" as const, date: checkpointDate(snapshot, checkpoint) };
+            sending.current = true;
+            setChecked(e.target.checked);
+            setBusy(true);
+            setError("");
+            void onCommand({ type: "SetCheckpointTiming", id: checkpoint.id, timing })
+              .then((ok) => {
+                if (!ok) { setChecked(anchor); setError("Привязка не сохранена. Повторите изменение."); }
+              })
+              .catch(() => { setChecked(anchor); setError("Привязка не сохранена. Повторите изменение."); })
+              .finally(() => { sending.current = false; setBusy(false); });
           }}
         />
         Привязать к дате окончания проекта
       </label>
+      {error && <p role="alert" className="field-error">{error}</p>}
       <p className="inspector-note">
         При привязке ручной перенос недоступен. Снимите флажок, чтобы перемещать
         чекпойнт мышью.
       </p>
-      <button
-        className="primary-button"
-        disabled={
-          next === original ||
-          (!anchor && !dateOnlySchema.safeParse(date).success)
-        }
-      >
-        Сохранить чекпойнт
-      </button>
-    </form>
+    </section>
   );
+}
+function checkboxEnter(e: React.KeyboardEvent<HTMLInputElement>) {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!e.repeat) e.currentTarget.click();
+  }
 }
 
 function ProcessColor({
@@ -911,10 +894,11 @@ function ProcessColor({
   const [draft, setDraft] = useState(value),
     sent = useRef(value),
     cancelled = useRef(false);
-  const commit = () => {
-    if (!cancelled.current && draft !== sent.current) {
-      sent.current = draft;
-      void onCommit(draft).then((ok) => {
+  const node = useRef<HTMLInputElement>(null);
+  const commit = (next = draft) => {
+    if (!cancelled.current && next !== sent.current) {
+      sent.current = next;
+      void onCommit(next).then((ok) => {
         if (!ok) {
           sent.current = value;
           setDraft(value);
@@ -922,10 +906,17 @@ function ProcessColor({
       });
     }
   };
+  useEffect(() => {
+    const input = node.current;
+    const change = () => { if (input) commit(input.value); };
+    input?.addEventListener("change", change);
+    return () => input?.removeEventListener("change", change);
+  });
   return (
     <label className="inspector-label color-field">
       Цвет процесса
       <input
+        ref={node}
         aria-label="Цвет процесса"
         type="color"
         value={draft}
@@ -933,7 +924,7 @@ function ProcessColor({
           cancelled.current = false;
           setDraft(e.target.value);
         }}
-        onBlur={commit}
+        onBlur={() => { commit(); }}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             e.preventDefault();

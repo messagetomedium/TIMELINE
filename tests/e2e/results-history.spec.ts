@@ -323,7 +323,6 @@ test("free checkpoint drag previews/cancels/commits; an anchored checkpoint expl
   );
   await handle.click();
   await page.getByLabel("Привязать к дате окончания проекта").check();
-  await page.getByRole("button", { name: "Сохранить чекпойнт" }).click();
   await saved(page);
   const anchored = await current(page);
   await expect(handle).toHaveAttribute(

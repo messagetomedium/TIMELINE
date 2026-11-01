@@ -109,35 +109,50 @@ export function DateCommandField({
   label,
   value,
   apply,
+  disabled = false,
 }: {
   label: string;
   value: string;
+  disabled?: boolean;
   apply: (value: ReturnType<typeof dateOnlySchema.parse>) => Promise<boolean>;
 }) {
-  const submitted = useRef(value);
+  const submitted = useRef(value),
+    sending = useRef(false),
+    manual = useRef(false);
   const [draft, setDraft] = useState(value),
+    [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const save = async (next: string) => {
+    const date = dateOnlySchema.safeParse(next);
+    if (!date.success) {
+      setError("Введите полную корректную дату");
+      return;
+    }
+    setError("");
+    if (next === value || next === submitted.current || sending.current) return;
+    submitted.current = next;
+    sending.current = true;
+    setBusy(true);
+    try {
+      if (!(await apply(date.data))) {
+        submitted.current = value;
+        setDraft(value);
+        setError("Дата не сохранена. Проверьте сообщение и повторите.");
+      }
+    } catch {
+      submitted.current = value;
+      setDraft(value);
+      setError("Не удалось сохранить дату");
+    } finally {
+      sending.current = false;
+      setBusy(false);
+    }
+  };
   return (
-    <form
-      className="date-command-field"
-      onSubmit={(e) => {
-        e.preventDefault();
-        const date = dateOnlySchema.safeParse(draft);
-        if (date.success && draft !== value && draft !== submitted.current) {
-          submitted.current = draft;
-          setError("");
-          void Promise.resolve()
-            .then(() => apply(date.data))
-            .then((ok) => {
-              if (!ok) submitted.current = value;
-            })
-            .catch(() => {
-              submitted.current = value;
-              setError("Дата выходит за поддерживаемый календарный диапазон.");
-            });
-        }
-      }}
-    >
+    <form className="date-command-field" onSubmit={(e) => {
+      e.preventDefault();
+      void save(draft);
+    }} noValidate>
       <label>
         {label}
         <input
@@ -145,23 +160,35 @@ export function DateCommandField({
           required
           min="0001-01-01"
           max="9999-12-31"
+          disabled={disabled || busy}
           value={draft}
+          onPointerDown={() => { manual.current = false; }}
           onChange={(e) => {
-            setDraft(e.target.value);
+            const next = e.target.value;
+            setDraft(next);
+            setError("");
+            if (!manual.current) void save(next);
+          }}
+          onBlur={() => { void save(draft); manual.current = false; }}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              e.stopPropagation();
+              setDraft(value);
+              setError("");
+            } else if (e.key === "Enter") {
+              e.preventDefault();
+              e.stopPropagation();
+              void save(draft);
+            } else if (e.key !== "Tab") manual.current = true;
           }}
         />
       </label>
-      <button
-        type="submit"
-        className="quiet-button"
-        disabled={!dateOnlySchema.safeParse(draft).success || draft === value}
-      >
-        Применить
-      </button>
       {error && <p role="alert">{error}</p>}
     </form>
   );
 }
+
 export function StageActions({
   snapshot,
   id,
