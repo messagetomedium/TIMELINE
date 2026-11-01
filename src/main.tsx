@@ -6,6 +6,7 @@ import { CommandService } from './application/v2/CommandService';
 import './styles/tokens.css';
 import './styles/app.css';
 import './styles/projects.css';
+import './styles/identity.css';
 
 const root = document.getElementById('root');
 if (!root) throw new Error('Application root is missing');

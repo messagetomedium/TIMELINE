@@ -50,9 +50,9 @@ export function ProjectsPage<TBackup extends { documents: readonly unknown[] }>(
     setTimeout(() => { URL.revokeObjectURL(url); }, 1000);
   };
   return <main className="projects-page" aria-label="Проекты">
-    <header className="projects-heading"><div><p className="eyebrow">Рабочее пространство</p><div className="projects-title-row"><h1>{archive ? "Архив" : "Проекты"}</h1><div className="view-switch" role="group" aria-label="Представление проектов">
-      <button aria-pressed={preferences.mode === 'cards'} onClick={() => { onPreferences({ ...preferences, mode: 'cards' }); }}><span aria-hidden="true">▦</span>Карточки</button>
-      <button aria-pressed={preferences.mode === 'timeline'} onClick={() => { onPreferences({ ...preferences, mode: 'timeline' }); }}><span aria-hidden="true">☷</span>Таймлайн</button>
+    <header className="projects-heading"><div><p className="eyebrow"><span className="editorial-index" aria-hidden="true">TL /</span> Рабочее пространство</p><div className="projects-title-row"><h1>{archive ? "Архив" : "Проекты"}</h1><div className="view-switch" role="group" aria-label="Представление проектов">
+      <button aria-pressed={preferences.mode === 'cards'} onClick={() => { onPreferences({ ...preferences, mode: 'cards' }); }}><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Карточки</button>
+      <button aria-pressed={preferences.mode === 'timeline'} onClick={() => { onPreferences({ ...preferences, mode: 'timeline' }); }}><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 5h10M8 12h13M3 19h14"/><path d="M3 3v4M8 10v4M17 17v4"/></svg>Таймлайн</button>
     </div></div></div><button className="primary-button" onClick={onNew}>+ Новый проект</button></header>
     {portfolio && <div className="projects-storage">
       <button onClick={() => { location.hash = archive ? '/projects' : '/archive'; }}>{archive ? 'Все проекты' : 'Архив'}</button>
