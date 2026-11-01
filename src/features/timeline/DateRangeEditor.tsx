@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { addDays, addMonths, dateOnly } from "../../domain";
 import type { DateOnly } from "../../domain";
 import {
@@ -45,7 +45,17 @@ export function DateRangeEditor({
     [open, setOpen] = useState(false),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
-    sending = useRef(false);
+    sending = useRef(false),
+    pending = useRef<[DateOnly, DateOnly] | null>(null),
+    retry = useRef<((left: DateOnly, right: DateOnly) => Promise<boolean>) | null>(null),
+    [previous, setPrevious] = useState({ start, end });
+  if (previous.start !== start || previous.end !== end) {
+    const old = previous;
+    // An arriving save must not overwrite a newer draft in the other field.
+    setA((current) => current === formatDate(old.start) ? formatDate(start) : current);
+    setB((current) => current === formatDate(old.end) ? formatDate(end) : current);
+    setPrevious({ start, end });
+  }
   const original = `${start}:${endExclusive}`,
     last = useRef(original);
   const save = async (left: DateOnly, right: DateOnly) => {
@@ -56,6 +66,11 @@ export function DateRangeEditor({
       setError("Конец выходит за поддерживаемый календарный диапазон");
       return false;
     }
+    const key = `${left}:${edge}`;
+    if (sending.current) {
+      if (last.current !== key) pending.current = [left, right];
+      return false;
+    }
     const reason =
       left > right
         ? "Конец должен быть не раньше начала"
@@ -64,9 +79,8 @@ export function DateRangeEditor({
       setError(reason);
       return false;
     }
-    const key = `${left}:${edge}`;
     if (key === original) return true;
-    if (sending.current || last.current === key) return false;
+    if (last.current === key) return false;
     sending.current = true;
     last.current = key;
     setBusy(true);
@@ -74,8 +88,8 @@ export function DateRangeEditor({
     try {
       const ok = await apply(left, edge);
       if (ok) {
-        setA(formatDate(left));
-        setB(formatDate(right));
+        setA((current) => current === a ? formatDate(left) : current);
+        setB((current) => current === b ? formatDate(right) : current);
       } else {
         last.current = original;
         setError("Изменение не сохранено. Проверьте сообщение и повторите.");
@@ -88,7 +102,15 @@ export function DateRangeEditor({
     } finally {
       sending.current = false;
       setBusy(false);
+      const queued = pending.current;
+      pending.current = null;
+      if (queued) void retry.current?.(...queued);
     }
+  };
+  useEffect(() => { retry.current = save; });
+  const commitInputs = () => {
+    try { void save(parseDate(a), parseDate(b)); }
+    catch (e) { setError(e instanceof Error ? e.message : "Проверьте даты"); }
   };
   const inputRange = () => {
     try {
@@ -101,7 +123,15 @@ export function DateRangeEditor({
     <section className="range-editor">
       <h3>{heading}</h3>
       <form
+        onBlur={(e) => {
+          if (e.target instanceof HTMLInputElement) commitInputs();
+        }}
         onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            e.stopPropagation();
+            commitInputs();
+          }
           if (e.key === "Escape") {
             e.stopPropagation();
             setA(formatDate(start));
@@ -111,11 +141,7 @@ export function DateRangeEditor({
         }}
         onSubmit={(e) => {
           e.preventDefault();
-          try {
-            void save(parseDate(a), parseDate(b));
-          } catch (e) {
-            setError(e instanceof Error ? e.message : "Проверьте даты");
-          }
+          commitInputs();
         }}
       >
         <div className="range-inputs">
@@ -180,9 +206,6 @@ export function DateRangeEditor({
             </svg>
           </button>
         </div>
-        <button className="quiet-button" disabled={busy}>
-          Сохранить даты
-        </button>
       </form>
       {error && !open && (
         <p className="field-error" role="alert">

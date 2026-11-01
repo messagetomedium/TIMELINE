@@ -105,19 +105,20 @@ test.beforeEach(async ({ page }) => {
   await page.goto("./");
   await create(page, "V1.5A");
 });
-test("project range inputs apply both dates atomically, reject cropping, preserve Redo on no-op and survive F5", async ({
+test("project range inputs save each finished edit once, reject cropping, preserve Redo and survive F5", async ({
   page,
 }) => {
   const before = await current(page);
   await page.getByRole("button", { name: "Проект", exact: true }).click();
   await page.getByLabel("Начало", { exact: true }).fill("01.11.2026");
   await page.getByLabel("Конец", { exact: true }).fill("20.11.2026");
-  await page.getByLabel("Конец", { exact: true }).press("Enter");
+  await page.getByLabel("Конец", { exact: true }).press("Tab");
+  await page.getByRole("button", { name: "Проект", exact: true }).click();
   await saved(page);
   const changed = await current(page);
   expect(changed.project.startDate).toBe("2026-11-01");
   expect(changed.project.endDateExclusive).toBe("2026-11-21");
-  expect(changed.project.revision).toBe(before.project.revision + 1);
+  expect(changed.project.revision).toBe(before.project.revision + 2);
   expect(changed.processes).toEqual(before.processes);
   expect(changed.tasks).toEqual(before.tasks);
   await page.getByLabel("Конец", { exact: true }).press("Enter");
@@ -125,6 +126,7 @@ test("project range inputs apply both dates atomically, reject cropping, preserv
   expect(await current(page)).toEqual(changed);
   await page.reload();
   await saved(page);
+  await undo(page);
   await undo(page);
   expect(semantic(await current(page))).toBe(semantic(before));
   await page.getByRole("button", { name: "Проект", exact: true }).click();
@@ -141,6 +143,7 @@ test("project range inputs apply both dates atomically, reject cropping, preserv
   await expect(page.getByLabel("Начало", { exact: true })).toHaveValue(
     "02.11.2026",
   );
+  await undo(page, true);
   await undo(page, true);
   expect(semantic(await current(page))).toBe(semantic(changed));
 });
@@ -239,7 +242,6 @@ test("actual top checkpoint circle drags without pan, previews only, cancels and
   expect(semantic(await current(page))).toBe(semantic(before));
   await handle.click();
   await page.getByLabel("Привязать к дате окончания проекта").check();
-  await page.getByRole("button", { name: "Сохранить чекпойнт" }).click();
   await saved(page);
   const anchored = await current(page);
   await expect(handle).toHaveAttribute("title", /снимите привязку/);
@@ -247,6 +249,46 @@ test("actual top checkpoint circle drags without pan, previews only, cancels and
   await drag(page, handle, -(await scale(page)));
   expect(await current(page)).toEqual(anchored);
   expect(await main.getAttribute("data-pan-x")).toBe(p);
+  const toggle = page.getByLabel("Привязать к дате окончания проекта");
+  await toggle.press("Space");
+  await saved(page);
+  const free = await current(page);
+  expect(free.checkpoints[0]?.timing).toEqual({ anchor: "free", date: "2026-11-15" });
+  expect(free.project.revision).toBe(anchored.project.revision + 1);
+  await drag(page, handle, await scale(page));
+  await saved(page);
+  const moved = await current(page);
+  expect(moved.checkpoints[0]?.timing).toEqual({ anchor: "free", date: "2026-11-16" });
+  await page.reload();
+  await saved(page);
+  await undo(page);
+  expect(semantic(await current(page))).toBe(semantic(free));
+  await undo(page, true);
+  expect(semantic(await current(page))).toBe(semantic(moved));
+  await handle.click();
+  const beforeRebind = await current(page);
+  await toggle.press("Enter");
+  await saved(page);
+  const rebound = await current(page);
+  expect(rebound.project.revision).toBe(beforeRebind.project.revision + 1);
+  expect(rebound.checkpoints[0]?.timing).toEqual({ anchor: "project_end" });
+  await drag(page, handle, -(await scale(page)));
+  expect(await current(page)).toEqual(rebound);
+  // A failed write keeps the checkbox and drag lock consistent with persisted data.
+  await page.evaluate(() => {
+    const original = Object.getOwnPropertyDescriptor(IDBObjectStore.prototype, "put")?.value as typeof IDBObjectStore.prototype.put;
+    IDBObjectStore.prototype.put = function (...args: Parameters<typeof original>) {
+      if (this.name === "documents") {
+        IDBObjectStore.prototype.put = original;
+        throw Error("Regression: write denied");
+      }
+      return original.apply(this, args);
+    };
+  });
+  await toggle.uncheck();
+  await expect(page.getByText("Привязка не сохранена. Повторите изменение.", { exact: true })).toBeVisible();
+  await expect(toggle).toBeChecked();
+  expect(await current(page)).toEqual(rebound);
 });
 test("project and checkpoint day fills share all temporal layers, exclude result gaps and follow zoom/pan/inspector resize", async ({
   page,
@@ -575,7 +617,7 @@ test("decorative gaps keep real dates across adjacent task/process bars and reac
   await undo(page);
   expect(semantic(await current(page))).toBe(semantic(before));
 });
-test("work inspector applies two date edges with the complete cascade in one persisted Undo", async ({
+test("work inspector saves finished date edits with cascade and persistent history", async ({
   page,
 }) => {
   const before = await current(page),
@@ -586,7 +628,7 @@ test("work inspector applies two date edges with the complete cascade in one per
   await page.getByLabel("Конец работы", { exact: true }).press("Enter");
   await saved(page);
   const next = await current(page);
-  expect(next.project.revision).toBe(before.project.revision + 1);
+  expect(next.project.revision).toBe(before.project.revision + 2);
   expect(required(next.tasks[0]).startDate).toBe("2026-11-01");
   expect(required(next.tasks[0]).endDateExclusive).toBe("2026-11-06");
   expect(required(next.tasks[1]).startDate).toBe("2026-11-06");
@@ -594,7 +636,9 @@ test("work inspector applies two date edges with the complete cascade in one per
   await page.reload();
   await saved(page);
   await undo(page);
+  await undo(page);
   expect(semantic(await current(page))).toBe(semantic(before));
+  await undo(page, true);
   await undo(page, true);
   expect(semantic(await current(page))).toBe(semantic(next));
   const beforeColor=await current(page);
@@ -619,7 +663,7 @@ test("work inspector applies two date edges with the complete cascade in one per
   await color.focus();
   await preview("#445588");
   await preview("#556699");
-  await color.press("Enter");
+  await color.dispatchEvent("change");
   await saved(page);
   const colored = await current(page);
   expect(required(colored.processes[0]).color).toBe("#556699");
