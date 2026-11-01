@@ -6,6 +6,11 @@ Read `docs/TIMELINE_MASTER_PLAN.md` before changing code. It is the single curre
 
 The master plan supersedes conflicting requirements in `ARCHITECTURE.md`, `CODEX_SPEC.md`, `docs/specs/*`, old roadmaps, and historical ADRs. Those files describe earlier versions; do not implement their conflicting behavior. Preserve compatible existing behavior and working code.
 
+
+## Design references for future authorized visual work
+
+The user-approved design references and image files live in docs/design-system/README.md. The complete visual specification is docs/design-system/DESIGN_SYSTEM_V2.md; task limits and a ready handoff are in docs/design-system/CODEX_HANDOFF.md. **Read these materials when a visual-redesign task is explicitly assigned.** They do not authorize redesign during an unrelated implementation stage and must not override the functional contract, roadmap, data model, or current task scope.
+
 ## Task discipline
 
 - Execute only the explicitly authorized task ID. V1.3A has already been merged into main through PR #1; do not merge it again or reopen/reuse that PR. Its merge/deployment does not establish user acceptance. The detailed V1.3B task card in section 12B is planning only; implement it only after the required user acceptance and a separate explicit V1.3B assignment. Preserve the roadmap order. A finished, merged, or deployed task is not permission to start another version.
