@@ -62,7 +62,7 @@ test("responsive document surfaces retain controls, local Cyrillic typography, r
       return { contrast: (Math.max(left, right) + .05) / (Math.min(left, right) + .05),
         viewport: innerWidth, foregroundCss: getComputedStyle(element).color,
         tabBackgroundCss: getComputedStyle(element.parentElement ?? element).backgroundColor,
-        ancestry: ancestry.map((node) => ({ node: node.tagName, cls: String(node.className).slice(0, 80), bg: getComputedStyle(node).backgroundColor })),
+        ancestry: ancestry.map((node) => ({ node: node.tagName, cls: node.className.slice(0, 80), bg: getComputedStyle(node).backgroundColor })),
         blendedBackground: background, parsedForeground: foreground };
       });
       if (measurement.contrast < 4.5 && !diagnosed) {
