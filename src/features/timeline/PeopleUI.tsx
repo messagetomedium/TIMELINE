@@ -228,11 +228,13 @@ export function PersonEditor({
   );
 }
 export function PeopleCatalog({
+  serverMode = false,
   catalog,
   onCommand,
   onUndo,
   onClose,
 }: {
+  serverMode?: boolean;
   catalog: CatalogState;
   onCommand: SendPeople;
   onUndo: (redo?: boolean) => void;
@@ -257,8 +259,7 @@ export function PeopleCatalog({
             </button>
           </header>
           <p className="inspector-note">
-            Изменения общие для всех проектов. История справочника отдельная от
-            истории проекта.
+            {serverMode ? "Изменения общие для всех проектов. Серверный Undo/Redo пока недоступен." : "Изменения общие для всех проектов. История справочника отдельная от истории проекта."}
           </p>
           <div className="people-toolbar">
             <button
@@ -270,6 +271,7 @@ export function PeopleCatalog({
               Добавить исполнителя
             </button>
             <button
+              style={serverMode ? { display: "none" } : undefined}
               aria-label="Отменить в справочнике"
               disabled={!catalog.undo.length}
               onClick={() => {
@@ -279,6 +281,7 @@ export function PeopleCatalog({
               ↶
             </button>
             <button
+              style={serverMode ? { display: "none" } : undefined}
               aria-label="Повторить в справочнике"
               disabled={!catalog.redo.length}
               onClick={() => {

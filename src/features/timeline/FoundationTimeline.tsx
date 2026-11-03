@@ -46,6 +46,7 @@ function processPositions(
   );
 }
 export function FoundationTimeline({
+  serverMode = false,
   snapshot,
   catalog,
   onPeople,
@@ -58,6 +59,7 @@ export function FoundationTimeline({
   inspectorCollapsed,
   onToggleInspector,
 }: {
+  serverMode?: boolean;
   inspectorCollapsed: boolean;
   onToggleInspector: () => void;
   snapshot: Snapshot;
@@ -374,14 +376,14 @@ export function FoundationTimeline({
           toolbar: (
             <>
               <button
-                aria-label="Отменить"
+                aria-label="Отменить" style={serverMode ? { display: "none" } : undefined}
                 disabled={!history.canUndo}
                 onClick={onUndo}
               >
                 ↶
               </button>
               <button
-                aria-label="Повторить"
+                aria-label="Повторить" style={serverMode ? { display: "none" } : undefined}
                 disabled={!history.canRedo}
                 onClick={onRedo}
               >
@@ -415,6 +417,7 @@ export function FoundationTimeline({
           ),
           inspector: (selection, preview, count) => (
             <FoundationInspector
+              serverMode={serverMode}
               key={currentSpecial?.id ?? selection?.id ?? "none"}
               snapshot={preview ?? snapshot}
               catalog={catalog}
@@ -456,6 +459,7 @@ export function FoundationTimeline({
   );
 }
 function FoundationInspector({
+  serverMode,
   snapshot,
   catalog,
   onPeople,
@@ -465,6 +469,7 @@ function FoundationInspector({
   onCreate,
   count,
 }: {
+  serverMode: boolean;
   snapshot: Snapshot;
   catalog: CatalogState;
   onPeople: SendPeople;
@@ -791,11 +796,10 @@ function FoundationInspector({
       )}
 
       <p className="inspector-note">
-        Работы толкают соседей в своей строке. Один жест — одна отмена.
+        {serverMode ? "Работы толкают соседей в своей строке. Один жест — одна команда." : "Работы толкают соседей в своей строке. Один жест — одна отмена."}
       </p>
       <p className="memory-notice">
-        Сохранено локально в этом браузере. История Undo/Redo сохраняется после
-        перезагрузки и отдельно для каждого проекта.
+        {serverMode ? "Изменения применяются через сервер. Undo/Redo пока недоступен: API не поддерживает безопасные обратные команды." : "Сохранено локально в этом браузере. История Undo/Redo сохраняется после перезагрузки и отдельно для каждого проекта."}
       </p>
     </aside>
   );

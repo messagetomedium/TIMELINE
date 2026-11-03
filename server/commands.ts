@@ -1,3 +1,4 @@
+import type { CommandResult } from "../src/application/v2/apiContracts";
 import { createHash, randomUUID } from "node:crypto";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { planCommand } from "../src/domain/v2/commands";
@@ -23,7 +24,7 @@ function canonical(value: unknown): string {
   return JSON.stringify(value);
 }
 export const hashPayload = (value: unknown) => createHash("sha256").update(canonical(value)).digest("hex");
-export interface CommandResult { commandId: string; projectId: string | null; revision: number; workspaceRevision: number; peopleRevision: number; changed: boolean }
+export type { CommandResult } from "../src/application/v2/apiContracts";
 
 function limits(d: Snapshot, workspace: typeof t.workspaces.$inferSelect) {
   if (d.processes.length > workspace.maxProcesses || d.processes.some((p) => d.tasks.filter((x) => x.processId === p.id).length > workspace.maxTasks)) throw new ApiError(409, "WORK_LIMIT");

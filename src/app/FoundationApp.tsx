@@ -6,12 +6,13 @@ import { WORKSPACE_ID } from "../domain/v2/model";
 import type { PeopleCommand } from "../domain/v2/people";
 import { FolderNavigation } from "../features/navigation/FolderNavigation";
 import { CommitText } from "../features/timeline/CommitText";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { dateOnly, projectIdSchema } from "../domain";
 import type { ProjectId, ViewPreferences } from "../domain";
 import type { Snapshot } from "../domain/v2/model";
 
-import { CommandService } from "../application/v2/CommandService";
+import type { UIService, ServerRecovery, RecoveryState } from "../application/v2/uiService";
+import { ServerRecoveryPanel } from "./ServerRecoveryPanel";
 import { FoundationTimeline } from "../features/timeline/FoundationTimeline";
 import { ProjectsPage } from "../features/projects/ProjectsPage";
 import {
@@ -37,7 +38,13 @@ function selectedId() {
   const raw = /^#\/projects\/([^/]+)$/.exec(location.hash)?.[1];
   return raw ? projectIdSchema.safeParse(raw).data : null;
 }
-export function FoundationApp({ service }: { service: CommandService }) {
+const noRecovery: RecoveryState = { pending: false, sending: false, message: "", intent: "", conflict: false, authRequired: false, drafts: {} };
+const noSubscribe = () => () => undefined;
+const noState = () => noRecovery;
+export function FoundationApp({ service, server }: { service: UIService; server?: { recovery: ServerRecovery; email: string; onLogout: () => Promise<void>; onLogin: () => void } }) {
+  const recovery = server?.recovery;
+  const recoveryState = useSyncExternalStore(recovery?.subscribe ?? noSubscribe, recovery?.getState ?? noState);
+  const [readFailed, setReadFailed] = useState(false), [epoch, setEpoch] = useState(0), [showDrafts, setShowDrafts] = useState(false);
   const [catalog, setCatalog] = useState(() => emptyCatalog(WORKSPACE_ID)),
     [peopleOpen, setPeopleOpen] = useState(false);
   const [documents, setDocuments] = useState<ProjectSummary[] | null>(null),
@@ -54,6 +61,7 @@ export function FoundationApp({ service }: { service: CommandService }) {
     [portfolio, setPortfolio] = useState(emptyPortfolio);
   const active = detail?.project.id === id ? detail : null;
   const [dialog, setDialog] = useState<"new" | ProjectSummary | null>(null);
+  const draftKeys = useRef(new WeakMap<HTMLElement, string>());
   const writing = useRef(0),
     operations = useRef(Promise.resolve()),
     queue = useRef(Promise.resolve()),
@@ -61,7 +69,10 @@ export function FoundationApp({ service }: { service: CommandService }) {
   const refresh = useCallback(async () => {
     const token = ++reading.current;
     const requestedId = selectedId() ?? null;
-    const s = await service.screen(requestedId);
+    let s: Awaited<ReturnType<UIService["screen"]>>;
+    try { s = await service.screen(requestedId); }
+    catch (e) { if (token === reading.current) setReadFailed(true); throw e; }
+    if (token === reading.current) setReadFailed(false);
     if (token !== reading.current) return;
     setActive(s.active);
     setLoadedId(requestedId);
@@ -79,7 +90,7 @@ export function FoundationApp({ service }: { service: CommandService }) {
   };
   useEffect(() => {
     void Promise.resolve().then(refresh).catch(report);
-    void hasLegacyData().then(setLegacy).catch(report);
+    if (!recovery) void hasLegacyData().then(setLegacy).catch(report);
     const listener = () => {
       setId(selectedId());
       void refresh().catch(report);
@@ -88,7 +99,7 @@ export function FoundationApp({ service }: { service: CommandService }) {
     return () => {
       window.removeEventListener("hashchange", listener);
     };
-  }, [refresh]);
+  }, [refresh, recovery]);
   const run = useCallback(
     (operation: () => Promise<unknown>) => {
       writing.current += 1;
@@ -102,7 +113,7 @@ export function FoundationApp({ service }: { service: CommandService }) {
           return true;
         } catch (e) {
           report(e);
-          await refresh().catch(report);
+          if (!recovery) await refresh().catch(report);
           return false;
         } finally {
           writing.current -= 1;
@@ -112,7 +123,7 @@ export function FoundationApp({ service }: { service: CommandService }) {
       operations.current = result.then(() => undefined);
       return result;
     },
-    [refresh],
+    [refresh, recovery],
   );
   const peopleCommand = (command: PeopleCommand) =>
     run(() =>
@@ -126,15 +137,16 @@ export function FoundationApp({ service }: { service: CommandService }) {
 
   const undo = useCallback(
     (redo = false) => {
-      if (id && !active) return;
+      if (recovery || (id && !active)) return;
       if (active) void run(() => service.undo(active.project.id, redo));
       else void run(() => service.portfolioCommand(portfolio.revision, redo ? "redo" : "undo"));
     },
-    [id, active, portfolio.revision, run, service],
+    [id, active, portfolio.revision, run, service, recovery],
   );
   useEffect(() => {
     const listener = (e: KeyboardEvent) => {
       if (
+        recovery ||
         !(e.ctrlKey || e.metaKey) ||
         e.key.toLowerCase() !== "z" ||
         e.altKey ||
@@ -156,7 +168,7 @@ export function FoundationApp({ service }: { service: CommandService }) {
     return () => {
       window.removeEventListener("keydown", listener);
     };
-  }, [active, undo, peopleOpen, catalog.revision, run, service]);
+  }, [active, undo, peopleOpen, catalog.revision, run, service, recovery]);
   useEffect(() => {
     document.title = active
       ? `${active.project.name} — Таймлайн`
@@ -185,6 +197,20 @@ export function FoundationApp({ service }: { service: CommandService }) {
         setPending((n) => n - 1);
       });
   };
+  useEffect(() => {
+    if (!recovery) return;
+    const guard = (event: BeforeUnloadEvent) => {
+      if (recovery.getState().pending || Object.keys(recovery.getState().drafts).length || writing.current) { event.preventDefault(); }
+    };
+    window.addEventListener("beforeunload", guard);
+    return () => { window.removeEventListener("beforeunload", guard); };
+  }, [recovery]);
+  const recovered = async (projectId: string | null) => {
+    setError(""); setShowDrafts(false); setDialog(null); setPeopleOpen(false); setEpoch((n) => n + 1);
+    if (projectId && !selectedId()) { location.hash = `/projects/${projectId}`; setId(projectId as ProjectId); }
+    await refresh();
+  };
+  const blocked = !!recovery && (busy || recoveryState.pending || readFailed);
   const source = (projectId: string) => {
     const d = documents?.find((x) => x.project.id === projectId);
     if (!d) throw Error("Проект не найден");
@@ -198,7 +224,21 @@ export function FoundationApp({ service }: { service: CommandService }) {
       return null;
     });
   return (
-    <div className="app-shell">
+    <div className="app-shell" onInputCapture={(event) => {
+      if (!recovery || !(event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)) return;
+      const input = event.target;
+      if (input.readOnly || ["password", "checkbox", "radio", "button", "submit", "file"].includes(input.type)) return;
+      const label = input.getAttribute("aria-label") ?? input.closest("label")?.textContent ?? input.name;
+      const fields = Array.from(event.currentTarget.querySelectorAll("input,textarea"));
+      const key = `${location.hash || "Проекты"} · ${label || "Поле"} · ${String(fields.indexOf(input))}`, value = input.value;
+      draftKeys.current.set(input, key);
+      recovery.rememberDraft(key, value);
+    }} onKeyDownCapture={(event) => {
+      if (event.key === "Escape" && recovery && event.target instanceof HTMLElement) {
+        const key = draftKeys.current.get(event.target);
+        if (key && !recovery.getState().pending) setTimeout(() => { recovery.forgetDraft(key); }, 0);
+      }
+    }}>
       <header className="app-header">
         <FolderNavigation
           documents={documents ?? []}
@@ -228,11 +268,19 @@ export function FoundationApp({ service }: { service: CommandService }) {
         >
           {busy || pending
             ? "Сохраняется…"
+            : recoveryState.pending ? "Запись не подтверждена"
+            : readFailed ? "Нет связи с хранилищем"
+            : Object.keys(recoveryState.drafts).length ? "Есть незавершённый ввод"
             : documents
-              ? "Локально в этом браузере"
+              ? recovery ? "Сохранено на сервере" : "Локально в этом браузере"
               : "Открываем хранилище…"}
         </span>
+        {server && <>{!!Object.keys(recoveryState.drafts).length && !recoveryState.pending && <button onClick={() => { setShowDrafts((open) => !open); }}>Черновик</button>}<span>{server.email}</span><button disabled={busy || recoveryState.pending || !!Object.keys(recoveryState.drafts).length} onClick={() => { void server.onLogout().catch(report); }}>Выйти</button></>}
       </header>
+      {server && <>
+        <ServerRecoveryPanel showDrafts={showDrafts} state={recoveryState} recovery={server.recovery} onRecovered={recovered} onError={report} onLogin={server.onLogin} />
+        {(readFailed || recoveryState.conflict) && <div className="legacy-notice"><button onClick={() => { void refresh().catch(report); }}>Загрузить с сервера</button><button onClick={server.onLogin}>Войти снова</button></div>}
+      </>}
       {legacy && (
         <div className="legacy-notice" role="note">
           Найдены данные V1.2. Они сохранены без изменений. Новый редактор
@@ -282,11 +330,12 @@ export function FoundationApp({ service }: { service: CommandService }) {
           )}
         </main>
       ) : (
-        <div className="app-content" aria-busy={busy}>
+        <div className="app-content" aria-busy={busy} inert={blocked}>
           {id ? (
             loadedId !== id ? <main className="workspace-loading">Открываем проект…</main> : active ? (
               <FoundationTimeline
-                key={id}
+                key={`${id}:${String(epoch)}`}
+                serverMode={!!recovery}
                 snapshot={active}
                 catalog={catalog}
                 onPeople={peopleCommand}
@@ -325,6 +374,7 @@ export function FoundationApp({ service }: { service: CommandService }) {
             )
           ) : (
             <ProjectsPage
+              serverMode={!!recovery}
               documents={documents.map(summaryDocument)}
               summaries={documents}
               portfolio={portfolio}
@@ -348,7 +398,7 @@ export function FoundationApp({ service }: { service: CommandService }) {
               onShift={(projectId, days, revision) => {
                 void run(() => service.projectCommand(projectId, { type: "ShiftProject", days }, revision));
               }}
-              onExport={() => service.exportBackup()}
+              onExport={() => service.exportBackup().catch((e: unknown) => { report(e); return null; })}
               onPreviewImport={previewImport}
               onImport={(backup, copies) =>
                 run(() => service.importBackup(backup, copies))
@@ -357,8 +407,11 @@ export function FoundationApp({ service }: { service: CommandService }) {
           )}
         </div>
       )}
+      <div inert={blocked}>
       {peopleOpen && (
         <PeopleCatalog
+          key={epoch}
+          serverMode={!!recovery}
           catalog={catalog}
           onCommand={peopleCommand}
           onUndo={(redo) => {
@@ -415,11 +468,14 @@ export function FoundationApp({ service }: { service: CommandService }) {
       )}
       {dialog === "new" && (
         <CreateDialog
-          key="new"
+          key={`new:${String(epoch)}`}
           source={null}
           busy={busy}
           onClose={() => {
             setDialog(null);
+            if (recovery && !recovery.getState().pending) {
+              try { recovery.clearDrafts(); } catch (e) { report(e); }
+            }
           }}
           onSave={async (name, description, start) => {
             let created: ProjectId | undefined;
@@ -436,6 +492,7 @@ export function FoundationApp({ service }: { service: CommandService }) {
           }}
         />
       )}
+      </div>
     </div>
   );
 }
