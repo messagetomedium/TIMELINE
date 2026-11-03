@@ -380,7 +380,7 @@ it("upgrades DB v3 additively and preserves actual old project history fingerpri
   const removeEmpty = (v: unknown) =>
     JSON.parse(
       JSON.stringify(v, (k, x: unknown) =>
-        k === "assignments" ? undefined : x,
+        k === "assignments" || k === "isActive" ? undefined : x,
       ),
     ) as unknown;
   const oldName = `old-${crypto.randomUUID()}`,
@@ -400,6 +400,7 @@ it("upgrades DB v3 additively and preserves actual old project history fingerpri
     s = new CommandService(r);
   expect((await s.snapshot()).historyIssues).toEqual([]);
   expect((await r.loadCatalog()).people).toEqual([]);
+  expect(required(await r.load(id)).tasks.every((t) => t.isActive)).toBe(true);
   await s.undo(id);
   expect(required(await r.load(id)).project.startDate).toBe(
     before.project.startDate,

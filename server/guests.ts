@@ -59,8 +59,8 @@ export class Guests {
       return guestProjectSchema.parse({
         project: { id: d.project.id, name: d.project.name, startDate: d.project.startDate, endDateExclusive: d.project.endDateExclusive, revision: d.project.revision },
         stages: d.stages.map(({ id, title, startDate, endDateExclusive, sortIndex }) => ({ id, title, startDate, endDateExclusive, sortIndex })),
-        processes: d.processes.map(({ id, stageId, title, startDate, endDateExclusive, status, color }) => ({ id, stageId, title, startDate, endDateExclusive, status, color })),
-        tasks: d.tasks.map(({ id, processId, title, startDate, endDateExclusive, status }) => ({ id, processId, title, startDate, endDateExclusive, status })),
+        processes: d.processes.map(({ id, stageId, isActive, title, startDate, endDateExclusive, status, color }) => ({ id, stageId, isActive, title, startDate, endDateExclusive, status, color })),
+        tasks: d.tasks.map(({ id, processId, isActive, title, startDate, endDateExclusive, status }) => ({ id, processId, isActive, title, startDate, endDateExclusive, status })),
         results: d.results.map(({ id, stageId, processId, title }) => ({ id, stageId, processId, title })),
         checkpoints: d.checkpoints.map((c) => ({ id: c.id, title: c.title, date: checkpointDate(d, c) })),
       });

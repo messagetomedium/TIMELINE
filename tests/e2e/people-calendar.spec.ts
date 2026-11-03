@@ -105,7 +105,7 @@ test.beforeEach(async ({ page }) => {
   await page.goto("./");
   await create(page, "V1.5A");
 });
-test("project range inputs save each finished edit once, reject cropping, preserve Redo and survive F5", async ({
+test("project range inputs save each finished edit once, confirm cropping, preserve Redo and survive F5", async ({
   page,
 }) => {
   const before = await current(page);
@@ -137,7 +137,8 @@ test("project range inputs save each finished edit once, reject cropping, preser
   ).toBeEnabled();
   await page.getByLabel("Начало", { exact: true }).fill("03.11.2026");
   await page.getByLabel("Начало", { exact: true }).press("Enter");
-  await expect(page.getByRole("alert")).toContainText("обрезают");
+  await expect(page.getByRole("dialog", { name: "Сокращение границ проекта" })).toBeVisible();
+  await page.getByRole("dialog", { name: "Сокращение границ проекта" }).getByRole("button", { name: "Отмена", exact: true }).click();
   expect(semantic(await current(page))).toBe(semantic(before));
   await page.getByLabel("Начало", { exact: true }).press("Escape");
   await expect(page.getByLabel("Начало", { exact: true })).toHaveValue(
@@ -178,7 +179,8 @@ test("range popup clears endpoints independently, normalizes reverse picks, navi
   await expect(day("2026-11-01")).toHaveClass(/range-start/);
   await expect(day("2026-11-10")).toHaveClass(/range-end/);
   await popup.getByRole("button", { name: "Подтвердить", exact: true }).click();
-  await expect(popup.getByRole("alert")).toContainText("обрезают");
+  await expect(page.getByRole("dialog", { name: "Сокращение границ проекта" })).toBeVisible();
+  await page.getByRole("dialog", { name: "Сокращение границ проекта" }).getByRole("button", { name: "Отмена", exact: true }).click();
   await expect(popup).toBeVisible();
   expect(await current(page)).toEqual(before);
   await day("2026-11-01").click();

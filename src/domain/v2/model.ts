@@ -1,5 +1,6 @@
 import { personSchema, assignmentSchema } from "./peopleModel";
 export { personSchema } from "./peopleModel";
+import { effectiveActive } from "./activity";
 import { z } from "zod";
 import {
   projectSchema,
@@ -104,9 +105,9 @@ export const snapshotSchema = z
     stages: z.array(stageSchema).min(1),
     lanes: z.array(laneSchema),
     processes: z.array(
-      processSchema.unwrap().extend({ workspaceId: uuid, stageId: uuid }),
+      processSchema.unwrap().extend({ workspaceId: uuid, stageId: uuid, isActive: z.boolean().default(true) }),
     ),
-    tasks: z.array(taskSchema.unwrap().extend(scope)),
+    tasks: z.array(taskSchema.unwrap().extend({ ...scope, isActive: z.boolean().default(true) })),
     checkpoints: z.array(checkpointSchema),
     results: z.array(resultSchema),
     assignments: z.array(assignmentSchema).default([]),
@@ -161,7 +162,7 @@ export const snapshotSchema = z
         l = lm.get(p.laneId);
       if (
         !s ||
-        !containsInterval(s, p) ||
+        (p.isActive && !containsInterval(s, p)) ||
         l?.kind !== "process" ||
         l.stageId !== p.stageId
       )
@@ -172,7 +173,7 @@ export const snapshotSchema = z
         l = lm.get(t.laneId);
       if (
         !p ||
-        !containsInterval(p, t) ||
+        (effectiveActive(d, t) && !containsInterval(p, t)) ||
         l?.kind !== "task" ||
         l.processId !== t.processId
       )
@@ -221,7 +222,7 @@ export const snapshotSchema = z
     }
     for (const list of [d.processes, d.tasks]) {
       const byLane = new Map<string, (typeof list)[number][]>();
-      for (const e of list) {
+      for (const e of list.filter((w) => effectiveActive(d, w))) {
         const row = byLane.get(e.laneId) ?? [];
         row.push(e);
         byLane.set(e.laneId, row);
@@ -266,7 +267,9 @@ export function displayDocument(d: Snapshot) {
     revision: d.project.revision,
   };
   const ordered = [...d.stages].sort((a, b) => a.sortIndex - b.sortIndex);
-  return projectDocumentSchema.parse({
+  // The V2 snapshot already enforces scope/activity. Legacy containment checks
+  // cannot validate an inactive V2 work projection. Parse its field shapes only.
+  return z.object(projectDocumentSchema.unwrap().shape).parse({
     schemaVersion: 1,
     project,
     stageMarkers: ordered.map((s) => ({

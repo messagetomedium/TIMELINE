@@ -254,7 +254,10 @@ test("project resize keeps work dates and free checkpoint; camera remains stable
   expect((await current(page)).project.endDateExclusive).toBe("2026-11-19");
   expect((await current(page)).tasks).toEqual(d.tasks);
   await applyDate(page, "Окончание проекта включительно", "2026-11-03");
-  await expect(page.getByRole("alert")).toBeVisible();
+  const choice = page.getByRole("dialog", { name: "Сокращение границ проекта" });
+  await expect(choice).toBeVisible();
+  expect((await current(page)).project.endDateExclusive).toBe("2026-11-19");
+  await choice.getByRole("button", { name: "Отмена", exact: true }).click();
   expect((await current(page)).project.endDateExclusive).toBe("2026-11-19");
 });
 test("stale structural command fails rather than deleting newer work", async ({

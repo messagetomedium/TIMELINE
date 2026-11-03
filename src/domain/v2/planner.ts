@@ -1,3 +1,4 @@
+import { effectiveActive } from "./activity";
 import { z } from "zod";
 import {
   addDays,
@@ -59,11 +60,11 @@ function shiftProcess(d: Snapshot, id: string, days: number) {
   const p = required(d.processes.find((x) => x.id === id));
   Object.assign(p, shiftInterval(p, days));
   for (const t of d.tasks)
-    if (t.processId === id) Object.assign(t, shiftInterval(t, days));
+    if (t.processId === id && effectiveActive(d, t)) Object.assign(t, shiftInterval(t, days));
 }
 function shiftContents(d: Snapshot, id: string, days: number) {
   for (const p of d.processes)
-    if (p.stageId === id) shiftProcess(d, p.id, days);
+    if (p.stageId === id && p.isActive) shiftProcess(d, p.id, days);
 }
 function shiftStage(d: Snapshot, s: Stage, days: number) {
   Object.assign(s, shiftInterval(s, days));
@@ -71,7 +72,7 @@ function shiftStage(d: Snapshot, s: Stage, days: number) {
 }
 const contentEnd = (d: Snapshot, s: Stage) =>
   d.processes
-    .filter((p) => p.stageId === s.id)
+    .filter((p) => p.stageId === s.id && p.isActive)
     .reduce((v, p) => later(v, p.endDateExclusive), addDays(s.startDate, 1));
 
 /** Forward deficit propagation. The edited stage's children are never shifted here. */
@@ -103,7 +104,7 @@ function growLeft(d: Snapshot, index: number, start: DateOnly) {
     const prev = stages[i - 1];
     if (!prev) break;
     const workEnd = d.processes
-      .filter((p) => p.stageId === prev.id)
+      .filter((p) => p.stageId === prev.id && p.isActive)
       .reduce<DateOnly | null>(
         (v, p) => (v ? later(v, p.endDateExclusive) : p.endDateExclusive),
         null,
@@ -125,7 +126,7 @@ export function expandStage(d: Snapshot, id: string) {
     index = stages.findIndex((s) => s.id === id),
     s = required(stages[index]);
   const start = d.processes
-    .filter((p) => p.stageId === id)
+    .filter((p) => p.stageId === id && p.isActive)
     .reduce((v, p) => earlier(v, p.startDate), s.startDate);
   if (start < s.startDate) growLeft(d, index, start);
   const end = contentEnd(d, s);
@@ -140,7 +141,7 @@ function moveBoundary(d: Snapshot, id: string, date: DateOnly) {
     prev &&
     (date <= prev.startDate ||
       d.processes.some(
-        (p) => p.stageId === prev.id && p.endDateExclusive > date,
+        (p) => p.isActive && p.stageId === prev.id && p.endDateExclusive > date,
       ))
   )
     throw Error("Граница отрезает работу или длительность предыдущего этапа.");
@@ -163,8 +164,9 @@ function ripple(
   const list = kind === "process" ? d.processes : d.tasks,
     original = kind === "process" ? source.processes : source.tasks;
   let cursor: Work = required(list.find((x) => x.id === id));
+  if (!effectiveActive(d, cursor)) return;
   const row = original
-    .filter((x) => x.laneId === cursor.laneId)
+    .filter((x) => effectiveActive(source, x) && x.laneId === cursor.laneId)
     .sort(
       (a, b) =>
         a.startDate.localeCompare(b.startDate) ||
@@ -190,7 +192,8 @@ function ripple(
 export function expandTaskParent(d: Snapshot, source: Snapshot, id: string) {
   const p = required(d.processes.find((p) => p.id === id)),
     before = { ...p };
-  for (const child of d.tasks.filter((t) => t.processId === id)) {
+  if (!p.isActive) return;
+  for (const child of d.tasks.filter((t) => t.processId === id && effectiveActive(d, t))) {
     p.startDate = earlier(p.startDate, child.startDate);
     p.endDateExclusive = later(p.endDateExclusive, child.endDateExclusive);
   }
@@ -229,6 +232,7 @@ export function applyTimelinePlan(
     );
   if (item.startDate >= item.endDateExclusive)
     throw Error("Длительность должна быть не меньше одного дня.");
+  if (!effectiveActive(d, item)) return;
   const direction =
     c.type === "move"
       ? Math.sign(c.days)
@@ -241,7 +245,7 @@ export function applyTimelinePlan(
           : 0;
   if (c.target.kind === "process") {
     if (
-      d.tasks.some((t) => t.processId === item.id && !containsInterval(item, t))
+      d.tasks.some((t) => effectiveActive(d, t) && t.processId === item.id && !containsInterval(item, t))
     )
       throw Error("Границы процесса должны вмещать все задачи.");
     ripple(d, source, "process", item.id, direction);
@@ -251,7 +255,7 @@ export function applyTimelinePlan(
     ripple(d, source, "task", item.id, direction);
     const t = required(d.tasks.find((t) => t.id === item.id)),
       p = required(d.processes.find((p) => p.id === t.processId));
-    for (const child of d.tasks.filter((x) => x.processId === p.id)) {
+    for (const child of d.tasks.filter((x) => x.processId === p.id && effectiveActive(d, x))) {
       p.startDate = earlier(p.startDate, child.startDate);
       p.endDateExclusive = later(p.endDateExclusive, child.endDateExclusive);
     }
@@ -274,8 +278,9 @@ export function resizeWorkRange(
   if (startDate >= endDateExclusive)
     throw Error("Конец работы должен быть не раньше начала");
   Object.assign(item, { startDate, endDateExclusive });
+  if (!effectiveActive(d, item)) return;
   if (kind === "process") {
-    if (d.tasks.some((t) => t.processId === id && !containsInterval(item, t)))
+    if (d.tasks.some((t) => effectiveActive(d, t) && t.processId === id && !containsInterval(item, t)))
       throw Error("Границы процесса обрезают существующие задачи");
     if (startDate < before.startDate) ripple(d, source, "process", id, -1);
     if (endDateExclusive > before.endDateExclusive)
@@ -399,6 +404,7 @@ export function applyStagePlan(d: Snapshot, c: StageCommand) {
         stageId: s.id,
         laneId: c.laneId,
         title: "Процесс",
+        isActive: true,
         details: "",
         startDate: s.startDate,
         endDateExclusive: addDays(s.startDate, 1),

@@ -1,3 +1,4 @@
+import { effectiveActive, rebindInactive, resizeProjectRange } from "./activity";
 import { assignmentCommands, applyAssignment } from "./assignmentCommands";
 import type { CatalogData } from "./peopleModel";
 import { statusSchema } from "../schema";
@@ -56,6 +57,7 @@ const textTarget = z.enum([
 ]);
 export const commandSchema = z.discriminatedUnion("type", [
   ...stageCommandSchemas,
+  z.strictObject({ type: z.literal("SetWorkActive"), kind: z.enum(["process", "task"]), id: z.uuid(), value: z.boolean() }),
   ...assignmentCommands,
   z.strictObject({
     type: z.literal("SetWorkStatus"),
@@ -81,6 +83,7 @@ export const commandSchema = z.discriminatedUnion("type", [
   }),
   z.strictObject({
     type: z.literal("ResizeProjectRange"),
+    effect: z.enum(["clip", "deactivate"]).optional(),
     startDate: dateOnlySchema,
     endDateExclusive: dateOnlySchema,
   }),
@@ -200,6 +203,11 @@ export function applyCommand(
     }
   } else if (c.type === "SetAssignment" || c.type === "CreatePersonAndAssign") {
     applyAssignment(d, c, people);
+  } else if (c.type === "SetWorkActive") {
+    const item = (c.kind === "process" ? d.processes : d.tasks).find((w) => w.id === c.id);
+    if (!item) throw Error("Работа не найдена");
+    item.isActive = c.value;
+    if (c.value && !snapshotSchema.safeParse(d).success) throw Error("Нельзя включить работу: исправьте даты и размещение внутри активных границ, включая задачи процесса и пересечения дорожки.");
   } else if (c.type === "SetWorkStatus") {
     const item = (c.kind === "process" ? d.processes : d.tasks).find(
       (x) => x.id === c.id,
@@ -233,25 +241,7 @@ export function applyCommand(
         : x,
     );
   } else if (c.type === "ResizeProjectRange") {
-    if (c.startDate >= c.endDateExclusive)
-      throw Error("Конец должен быть не раньше начала");
-    if (
-      d.processes.some(
-        (p) =>
-          p.startDate < c.startDate || p.endDateExclusive > c.endDateExclusive,
-      )
-    )
-      throw Error(
-        "Нельзя сократить проект: новые границы обрезают существующие работы",
-      );
-    const stages = [...d.stages].sort((a, b) => a.sortIndex - b.sortIndex),
-      first = stages[0],
-      last = stages.at(-1);
-    if (!first || !last) throw Error("Этапы не найдены");
-    d.project.startDate = c.startDate;
-    d.project.endDateExclusive = c.endDateExclusive;
-    first.startDate = c.startDate;
-    last.endDateExclusive = c.endDateExclusive;
+    resizeProjectRange(d, c, c.effect);
   } else if (c.type === "CreateCheckpoint") {
     d.checkpoints.push({
       id: c.id,
@@ -291,12 +281,12 @@ export function applyCommand(
     }));
     d.processes = d.processes.map((x) => ({
       ...x,
-      ...shiftInterval(x, c.days),
+      ...(x.isActive ? shiftInterval(x, c.days) : {}),
       revision: x.revision + 1,
     }));
     d.tasks = d.tasks.map((x) => ({
       ...x,
-      ...shiftInterval(x, c.days),
+      ...(effectiveActive(d, x) ? shiftInterval(x, c.days) : {}),
       revision: x.revision + 1,
     }));
     d.checkpoints = d.checkpoints.map((x) => ({
@@ -347,6 +337,14 @@ export function applyCommand(
       (w) => w.id === a.targetId,
     ),
   );
+  const calendarChanged = d.stages.length !== source.stages.length || d.stages.some((s) => {
+    const old = source.stages.find((x) => x.id === s.id);
+    return !old || old.startDate !== s.startDate || old.endDateExclusive !== s.endDateExclusive;
+  }) || d.processes.some((p) => {
+    const old = source.processes.find((x) => x.id === p.id);
+    return !old || old.startDate !== p.startDate || old.endDateExclusive !== p.endDateExclusive;
+  });
+  if (calendarChanged) rebindInactive(d);
   return finalize(source, d);
 }
 const collections = [

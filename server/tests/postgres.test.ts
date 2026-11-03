@@ -128,6 +128,40 @@ describe("real PostgreSQL command and security boundary", () => {
     await admin.end();
   });
 
+  it("V1.6A.1 persists activity and atomic boundary commands with receipts, conflicts and rollback", async () => {
+    const { result } = await create(), d = await read(result.projectId ?? ""), url = `/api/v1/projects/${d.project.id}/commands`;
+    const e = envelope(d, { type: "ResizeProjectRange", startDate: "2026-11-03" as Snapshot["project"]["startDate"], endDateExclusive: "2026-11-10" as Snapshot["project"]["startDate"], effect: "clip" });
+    const response = await request("POST", url, ownerCookie, e);
+    expect(response.statusCode, response.body).toBe(200);
+    expect((await request("POST", url, ownerCookie, e)).json<unknown>()).toEqual(response.json<unknown>());
+    const after = await read(d.project.id);
+    // SQL task ordering is not a business invariant: assert against stable IDs.
+    const inside = d.tasks.find((t) => t.startDate >= "2026-11-03" && t.endDateExclusive <= "2026-11-10");
+    const outsideTask = d.tasks.find((t) => t.endDateExclusive <= "2026-11-03" || t.startDate >= "2026-11-10");
+    expect(inside).toBeDefined();
+    expect(outsideTask).toBeDefined();
+    expect(after.tasks.find((t) => t.id === inside?.id)).toMatchObject({ isActive: true, startDate: inside?.startDate, endDateExclusive: inside?.endDateExclusive });
+    expect(after.tasks.find((t) => t.id === outsideTask?.id)).toMatchObject({ isActive: false, startDate: outsideTask?.startDate, endDateExclusive: outsideTask?.endDateExclusive });
+    expect(after.project.revision).toBe(1);
+    expect((await request("POST", url, ownerCookie, { ...e, commandId: randomUUID() })).statusCode).toBe(409);
+    expect((await request("POST", url, ownerCookie, { ...e, command: { ...e.command, effect: "deactivate" } })).statusCode).toBe(409);
+    const p = after.processes[0]; expect(p).toBeDefined();
+    const off = await execute(after, { type: "SetWorkActive", kind: "process", id: p?.id ?? "", value: false });
+    const outside = await execute(off, { type: "ResizeWorkRange", kind: "process", id: p?.id ?? "", startDate: dateOnlySchema.parse("2026-10-01"), endDateExclusive: dateOnlySchema.parse("2026-10-03") });
+    expect((await request("POST", url, ownerCookie, envelope(outside, { type: "SetWorkActive", kind: "process", id: p?.id ?? "", value: true }))).statusCode).toBe(422);
+    const pending = envelope(outside, { type: "ResizeProjectRange", startDate: dateOnlySchema.parse("2026-11-04"), endDateExclusive: dateOnlySchema.parse("2026-11-09"), effect: "deactivate" });
+    await admin.query("create function test_activity_fail() returns trigger language plpgsql as $$ begin raise exception 'activity rollback'; end $$");
+    await admin.query("create trigger test_activity_fail before insert on audit_events for each row execute function test_activity_fail()");
+    try {
+      expect((await request("POST", url, ownerCookie, pending)).statusCode).toBe(500);
+      expect(await read(d.project.id)).toEqual(outside);
+      expect((await admin.query("select command_id from command_receipts where command_id = $1", [pending.commandId])).rowCount).toBe(0);
+    } finally { await admin.query("drop trigger test_activity_fail on audit_events"); await admin.query("drop function test_activity_fail()"); }
+    expect((await request("POST", url, ownerCookie, pending)).statusCode).toBe(200);
+    await runtime.app.close(); mailer = new MemoryMailer(); runtime = await createApp(configuration(runtimeUrl), mailer);
+    expect((await read(d.project.id)).processes.find((w) => w.id === p?.id)).toMatchObject({ isActive: false, startDate: "2026-10-01" });
+  });
+
   it("starts an actual HTTP listener; migrations are versioned and app role cannot perform DDL", async () => {
     const address = await runtime.app.listen({ host: "127.0.0.1", port: 0 });
     expect((await fetch(`${address}/health/live`)).status).toBe(200);

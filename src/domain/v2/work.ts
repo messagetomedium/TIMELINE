@@ -1,3 +1,4 @@
+import { effectiveActive } from "./activity";
 import { activeAssignment } from "./peopleModel";
 import type { CatalogData } from "./peopleModel";
 import { z } from "zod";
@@ -251,7 +252,7 @@ export function applyWork(
         Object.assign(item, shiftInterval(item, c.days));
         if (c.kind === "process") {
           for (const t of d.tasks)
-            if (t.processId === item.id)
+            if (t.processId === item.id && effectiveActive(d, t))
               Object.assign(t, shiftInterval(t, c.days));
         } else if ("processId" in item)
           item.processId = processIdSchema.parse(target.parentId);
@@ -302,6 +303,7 @@ export function applyWork(
       details: "",
       startDate: c.startDate,
       endDateExclusive: c.endDateExclusive,
+      isActive: true,
       status: "Не начато" as const,
       sortIndex: 0,
       revision: 0,
@@ -360,7 +362,7 @@ export function applyWork(
       containsInterval(container, candidate) &&
       !list.some(
         (w) =>
-          w.laneId === item.laneId &&
+          effectiveActive(d, w) && w.laneId === item.laneId &&
           w.startDate < candidate.endDateExclusive &&
           candidate.startDate < w.endDateExclusive,
       );

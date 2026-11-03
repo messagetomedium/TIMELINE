@@ -36,7 +36,7 @@ export function DateRangeEditor({
   heading?: string;
   startLabel?: string;
   endLabel?: string;
-  apply: (start: DateOnly, end: DateOnly) => Promise<boolean>;
+  apply: (start: DateOnly, end: DateOnly) => Promise<boolean | null>;
   validate: (start: DateOnly, end: DateOnly) => string | null;
 }) {
   const end = addDays(endExclusive, -1),
@@ -90,11 +90,15 @@ export function DateRangeEditor({
       if (ok) {
         setA((current) => current === a ? formatDate(left) : current);
         setB((current) => current === b ? formatDate(right) : current);
+      } else if (ok === null) {
+        last.current = original;
+        pending.current = null;
+        setA(formatDate(start)); setB(formatDate(end)); setError("");
       } else {
         last.current = original;
         setError("Изменение не сохранено. Проверьте сообщение и повторите.");
       }
-      return ok;
+      return ok === true;
     } catch (e) {
       last.current = original;
       setError(e instanceof Error ? e.message : "Не удалось сохранить даты");

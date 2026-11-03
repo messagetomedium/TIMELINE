@@ -26,7 +26,7 @@ export interface StoredHistory {
 export const historyKey = (id: string) => `current:${id}`;
 export function fingerprint(d: Snapshot) {
   return JSON.stringify(d, (key, value: unknown) =>
-    key === "viewPreferences" ||
+    key === "viewPreferences" || (key === "isActive" && value === true) ||
     (key === "assignments" && Array.isArray(value) && value.length === 0)
       ? undefined
       : value,
@@ -34,7 +34,7 @@ export function fingerprint(d: Snapshot) {
 }
 export function semantic(d: Snapshot) {
   return JSON.stringify(d, (key, value: unknown) =>
-    key === "viewPreferences" ||
+    key === "viewPreferences" || (key === "isActive" && value === true) ||
     key === "revision" ||
     key === "updatedAt" ||
     (key === "assignments" && Array.isArray(value) && value.length === 0)

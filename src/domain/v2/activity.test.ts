@@ -1,0 +1,97 @@
+import { expect, it } from "vitest";
+import { dateOnly } from "../dates";
+import { createTemplate } from "./template";
+import { applyCommand, planCommand } from "./commands";
+import { displayDocument, snapshotSchema } from "./model";
+import { rangeImpact } from "./activity";
+import { required } from "../../testing/required";
+const make = () => createTemplate("Тест", "", dateOnly("2026-11-01"), () => crypto.randomUUID(), "2026-11-01T00:00:00Z");
+const range = { type: "ResizeProjectRange" as const, startDate: dateOnly("2026-11-03"), endDateExclusive: dateOnly("2026-11-10") };
+it("requires an explicit consequence; clips partial work and retains wholly excluded work and all links", () => {
+  let d = make();
+  const process = required(d.processes[2]), resultId = crypto.randomUUID();
+  d = applyCommand(d, { type: "UpdateResult", id: resultId, stageId: process.stageId, processId: process.id, field: "title", value: "Сохранить результат" });
+  d = applyCommand(d, { type: "SetAssignment", id: crypto.randomUUID(), kind: "process", targetId: process.id, personId: null, roleLabel: "Сохранить роль" });
+  expect(rangeImpact(d, range).length).toBeGreaterThan(0);
+  expect(() => applyCommand(d, range)).toThrow("Выберите");
+  const next = applyCommand(d, { ...range, effect: "clip" });
+  expect(next.processes).toHaveLength(d.processes.length); expect(next.tasks).toHaveLength(d.tasks.length);
+  const task = required(d.tasks[0]), saved = required(next.tasks.find((t) => t.id === task.id));
+  expect(saved).toMatchObject({ startDate: task.startDate, endDateExclusive: task.endDateExclusive, isActive: false });
+  expect(next.processes[0]?.startDate).toBe(range.startDate);
+  expect(next.processes[2]?.endDateExclusive).toBe(range.endDateExclusive);
+  expect(next.assignments).toEqual(d.assignments);
+  expect(next.results.find((r) => r.id === resultId)).toMatchObject({ processId: process.id, title: "Сохранить результат" });
+  expect(() => displayDocument(next)).not.toThrow();
+});
+it("deactivates without changing dates; rejects invalid reactivation without extending containers", () => {
+  const d = make(), next = applyCommand(d, { ...range, effect: "deactivate" });
+  for (const w of [...d.processes, ...d.tasks]) expect([...next.processes, ...next.tasks].find((x) => x.id === w.id)).toMatchObject({ startDate: w.startDate, endDateExclusive: w.endDateExclusive });
+  const p = required(next.processes[0]);
+  expect(() => applyCommand(next, { type: "SetWorkActive", kind: "process", id: p.id, value: true })).toThrow("Нельзя включить");
+  expect(next.project.startDate).toBe(range.startDate);
+});
+it("inactive parents make children ineffective; independent task flags are preserved and validated on activation", () => {
+  let d = make(); const p = required(d.processes[0]), t = required(d.tasks[0]);
+  d = applyCommand(d, { type: "SetWorkActive", kind: "process", id: p.id, value: false });
+  const before = d.project;
+  d = applyCommand(d, { type: "ResizeWorkRange", kind: "task", id: t.id, startDate: dateOnly("2026-10-01"), endDateExclusive: dateOnly("2026-10-02") });
+  expect(d.tasks[0]?.isActive).toBe(true); expect(d.project.startDate).toBe(before.startDate);
+  expect(() => applyCommand(d, { type: "SetWorkActive", kind: "process", id: p.id, value: true })).toThrow("Нельзя включить");
+  d = applyCommand(d, { type: "SetWorkActive", kind: "task", id: t.id, value: false });
+  d = applyCommand(d, { type: "SetWorkActive", kind: "process", id: p.id, value: true });
+  expect(d.processes[0]?.isActive).toBe(true); expect(d.tasks[0]?.isActive).toBe(false);
+});
+it("inactive works never ripple or move with containers, and rebind deterministically across stage insertion", () => {
+  let d = make(); const p = required(d.processes[2]);
+  d = applyCommand(d, { type: "SetWorkActive", kind: "process", id: p.id, value: false });
+  d = applyCommand(d, { type: "ResizeWorkRange", kind: "process", id: p.id, startDate: dateOnly("2026-11-09"), endDateExclusive: dateOnly("2026-11-10") });
+  const taskDates = d.tasks.filter((t) => t.processId === p.id).map((t) => [t.id, t.startDate, t.endDateExclusive]);
+  const stage = required(d.stages[1]), command = { type: "InsertStage" as const, id: crypto.randomUUID(), leftStageId: required(d.stages[0]).id, rightStageId: stage.id, title: "Вставка", durationDays: 7 };
+  const a = planCommand(d, command).document, b = planCommand(d, command).document;
+  expect(a).toEqual(b);
+  expect(a.processes.find((w) => w.id === p.id)).toMatchObject({ startDate: "2026-11-09", endDateExclusive: "2026-11-10", stageId: command.id });
+  expect(a.tasks.filter((t) => t.processId === p.id).map((t) => [t.id, t.startDate, t.endDateExclusive])).toEqual(taskDates);
+  expect(snapshotSchema.safeParse(a).success).toBe(true);
+  const moved = applyCommand(a, { type: "ResizeWorkRange", kind: "process", id: p.id, startDate: dateOnly("2027-01-01"), endDateExclusive: dateOnly("2027-01-03") });
+  expect(moved.project.endDateExclusive).toBe(a.project.endDateExclusive);
+});
+it("excludes inactive tasks from collisions and resize constraints; active rules stay strict", () => {
+  let d = make(); const t = required(d.tasks[0]), other = required(d.tasks[1]), p = required(d.processes[0]);
+  d = applyCommand(d, { type: "SetWorkActive", kind: "task", id: t.id, value: false });
+  d = applyCommand(d, { type: "ResizeWorkRange", kind: "task", id: t.id, startDate: other.startDate, endDateExclusive: other.endDateExclusive });
+  expect(() => applyCommand(d, { type: "SetWorkActive", kind: "task", id: t.id, value: true })).toThrow("Нельзя включить");
+  const shrunk = applyCommand(d, { type: "ResizeWorkRange", kind: "process", id: p.id, startDate: other.startDate, endDateExclusive: other.endDateExclusive });
+  expect(shrunk.processes[0]?.startDate).toBe(other.startDate);
+});
+it("accepts old JSON without activity, preserves disabled flags on roundtrip and keeps deletion semantics", () => {
+  const d = make();
+  const old: unknown = JSON.parse(JSON.stringify(d, (key, value: unknown) => key === "isActive" ? undefined : value));
+  expect(snapshotSchema.parse(old)).toEqual(d);
+  const p = required(d.processes[0]), next = applyCommand(d, { type: "SetWorkActive", kind: "process", id: p.id, value: false });
+  expect(snapshotSchema.parse(JSON.parse(JSON.stringify(next)))).toEqual(next);
+  const removed = applyCommand(next, { type: "DeleteStage", id: p.stageId });
+  expect(removed.processes.some((w) => w.id === p.id)).toBe(false);
+});
+it("moving a boundary ignores inactive dates, preserves children, and resolves nearest-stage ties to the earlier stage", () => {
+  let d = make();
+  for (const p of d.processes) d = applyCommand(d, { type: "SetWorkActive", kind: "process", id: p.id, value: false });
+  const p = required(d.processes[2]), stage = required(d.stages[1]);
+  d = applyCommand(d, { type: "ResizeWorkRange", kind: "process", id: p.id, startDate: dateOnly("2026-11-06"), endDateExclusive: dateOnly("2026-11-10") });
+  expect(d.processes.find((w) => w.id === p.id)?.stageId).toBe(d.stages[0]?.id);
+  const dates = (v: typeof d) => [...v.processes, ...v.tasks].map((w) => [w.id, w.startDate, w.endDateExclusive]);
+  const next = applyCommand(d, { type: "MoveStageBoundary", id: stage.id, date: dateOnly("2026-11-03") });
+  expect(dates(next)).toEqual(dates(d));
+  expect(next.stages[0]?.endDateExclusive).toBe("2026-11-03");
+  const active = make();
+  expect(() => applyCommand(active, { type: "MoveStageBoundary", id: required(active.stages[1]).id, date: dateOnly("2026-11-03") })).toThrow("Граница отрезает");
+});
+it("keeps imported inactive placement unchanged for metadata and no-op saves", () => {
+  const d = make(), p = required(d.processes[2]);
+  p.isActive = false; p.startDate = dateOnly("2026-11-01");
+  snapshotSchema.parse(d);
+  expect(applyCommand(d, { type: "SetWorkActive", kind: "process", id: p.id, value: false })).toBe(d);
+  expect(applyCommand(d, { type: "Rename", kind: "process", id: p.id, value: p.title })).toBe(d);
+  const next = applyCommand(d, { type: "Describe", kind: "process", id: p.id, value: "Заметка" });
+  expect(next.processes[2]?.stageId).toBe(p.stageId);
+});

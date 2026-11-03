@@ -43,8 +43,8 @@ export type WorkspaceCommand = z.infer<typeof workspaceCommandSchema>;
 export const guestProjectSchema = z.strictObject({
   project: z.strictObject({ id: z.uuid(), name: z.string(), startDate: dateOnlySchema, endDateExclusive: dateOnlySchema, revision: z.number().int() }),
   stages: z.array(z.strictObject({ id: z.uuid(), title: z.string(), startDate: dateOnlySchema, endDateExclusive: dateOnlySchema, sortIndex: z.number().int() })),
-  processes: z.array(z.strictObject({ id: z.uuid(), stageId: z.uuid(), title: z.string(), startDate: dateOnlySchema, endDateExclusive: dateOnlySchema, status: z.string(), color: z.string() })),
-  tasks: z.array(z.strictObject({ id: z.uuid(), processId: z.uuid(), title: z.string(), startDate: dateOnlySchema, endDateExclusive: dateOnlySchema, status: z.string() })),
+  processes: z.array(z.strictObject({ id: z.uuid(), stageId: z.uuid(), isActive: z.boolean(), title: z.string(), startDate: dateOnlySchema, endDateExclusive: dateOnlySchema, status: z.string(), color: z.string() })),
+  tasks: z.array(z.strictObject({ id: z.uuid(), processId: z.uuid(), isActive: z.boolean(), title: z.string(), startDate: dateOnlySchema, endDateExclusive: dateOnlySchema, status: z.string() })),
   results: z.array(z.strictObject({ id: z.uuid(), stageId: z.uuid(), processId: z.uuid().nullable(), title: z.string() })),
   checkpoints: z.array(z.strictObject({ id: z.uuid(), title: z.string(), date: dateOnlySchema })),
 });
