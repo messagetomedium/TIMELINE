@@ -1,8 +1,10 @@
 # TIMELINE
 
 Текущий frontend: `npm ci`, `npm run dev`. GitHub Pages продолжает работать
-локально через IndexedDB; серверный режим и перенос пользовательских данных здесь
-не включаются. CSS, редактор и локальная история не меняются в V1.6A.
+локально через IndexedDB. V2.0A подключает этот же интерфейс к существующим API и
+PostgreSQL при серверном размещении (`APP_STORAGE_MODE=server`, Fastify + `STATIC_ROOT`).
+Режим задаётся явно в HTML при размещении; автоматического переноса локальных проектов
+или переключения на IndexedDB при ошибке API нет. Дизайн и локальная история сохранены.
 
 ## Сервер V1.6A локально
 
@@ -10,7 +12,7 @@
 зафиксированы в lockfile. Проверены официальные [Fastify LTS](https://github.com/fastify/fastify/blob/main/docs/Reference/LTS.md),
 [Better Auth / Fastify](https://www.better-auth.com/docs/integrations/fastify)
 и [Drizzle adapter](https://www.better-auth.com/docs/adapters/drizzle).
-Docker-пакет, staging, backup/restore и CI описаны в [docs/STAGING.md](docs/STAGING.md). Подключение frontend к API остаётся для V2.0.
+Docker-пакет, staging, backup/restore и CI описаны в [docs/STAGING.md](docs/STAGING.md). Настройка режимов, авторизации, восстановления черновиков и ограничения серверного интерфейса V2.0A описаны там же.
 
 1. Создать пустую БД `timeline`, отдельную учётку оператора миграций (владелец
    БД/таблиц) и runtime-роль `timeline_app` с LOGIN, без SUPERUSER, CREATEDB,

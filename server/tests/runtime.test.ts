@@ -27,12 +27,12 @@ it("static frontend uses an explicit allowlist, same-origin policy and blocks fi
   const directory = await mkdtemp(join(tmpdir(), "timeline-static-")), root = join(directory, "dist"), app = Fastify();
   try {
     await mkdir(join(root, "assets"), { recursive: true });
-    await writeFile(join(root, "index.html"), "<!doctype html><title>TIMELINE</title>");
+    await writeFile(join(root, "index.html"), '<!doctype html><meta name="timeline-storage" content="local" /><title>TIMELINE</title>');
     await writeFile(join(root, "assets/app-abcdefgh.js"), "export const value = 1;");
     await writeFile(join(directory, "private.js"), "secret marker");
     await symlink(join(directory, "private.js"), join(root, "assets/leak.js"));
     await registerFrontend(app, root);
-    const index = await app.inject("/"); expect(index.statusCode).toBe(200); expect(index.headers["content-security-policy"]).toContain("connect-src 'self'");
+    const index = await app.inject("/"); expect(index.statusCode).toBe(200); expect(index.body).toContain('name="timeline-storage" content="server"'); expect(index.headers["content-security-policy"]).toContain("connect-src 'self'");
     const asset = await app.inject("/assets/app-abcdefgh.js"); expect(asset.statusCode).toBe(200); expect(asset.headers["cache-control"]).toContain("immutable");
     for (const path of ["/assets/leak.js", "/assets/%2e%2e/private.js", "/assets/%2e%2e%2fprivate.js", "/assets/file.map", "/api/missing", "/.env"]) expect((await app.inject(path)).statusCode).toBe(404);
     expect((await app.inject({ method: "HEAD", url: "/" })).body).toBe("");

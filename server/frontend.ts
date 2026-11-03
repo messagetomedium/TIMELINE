@@ -1,5 +1,5 @@
 import { createReadStream } from "node:fs";
-import { realpath, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { extname, resolve, sep } from "node:path";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
@@ -9,7 +9,7 @@ const types: Record<string, string> = {
   ".woff2": "font/woff2", ".png": "image/png", ".webp": "image/webp", ".txt": "text/plain; charset=utf-8",
 };
 /** Hash navigation needs only these static roots. Unknown API paths remain JSON 404. */
-export async function registerFrontend(app: FastifyInstance, directory: string) {
+export async function registerFrontend(app: FastifyInstance, directory: string, mode: "local" | "server" = "server") {
   const root = await realpath(directory);
   if (!(await stat(resolve(root, "index.html"))).isFile()) throw Error("Frontend build is missing");
   async function send(request: FastifyRequest, reply: FastifyReply) {
@@ -28,6 +28,11 @@ export async function registerFrontend(app: FastifyInstance, directory: string) 
     reply.type(type).header("Cross-Origin-Resource-Policy", "same-origin");
     if (name === "index.html") reply.header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
     else if (/-[a-zA-Z0-9_-]{8,}\.(js|css|woff2)$/.test(name)) reply.header("Cache-Control", "public, max-age=31536000, immutable");
+    if (name === "index.html") {
+      const html = await readFile(file, "utf8");
+      if (!html.includes('<meta name="timeline-storage" content="local" />')) throw Error("Frontend mode marker is missing");
+      return reply.send(html.replace('<meta name="timeline-storage" content="local" />', `<meta name="timeline-storage" content="${mode}" />`));
+    }
     return reply.send(createReadStream(file));
   }
   app.get("/", send);

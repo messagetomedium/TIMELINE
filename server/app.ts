@@ -173,7 +173,7 @@ export async function createApp(config: Config, suppliedMailer?: Mailer) {
   });
   // Explicit no-data 404; unknown API paths never fall through to a SPA.
   app.setNotFoundHandler((_request, reply) => reply.code(404).send({ error: "NOT_FOUND" }));
-  try { if (config.STATIC_ROOT) await registerFrontend(app, config.STATIC_ROOT); }
+  try { if (config.STATIC_ROOT) await registerFrontend(app, config.STATIC_ROOT, config.APP_STORAGE_MODE); }
   catch (error) { await app.close(); throw error; }
   return { app, auth, db, pool, mailer };
 }

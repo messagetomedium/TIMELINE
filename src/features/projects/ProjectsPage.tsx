@@ -9,6 +9,7 @@ import { PortfolioTimeline } from './PortfolioTimeline';
 import '../../styles/projects.css';
 
 interface Props<TBackup extends { documents: readonly unknown[] }> extends ProjectActionProps {
+  readonly serverMode?: boolean;
   readonly summaries?: readonly ProjectSummary[];
   readonly portfolio?: PortfolioState;
   readonly onPortfolio?: (command: PortfolioCommand) => void;
@@ -22,7 +23,7 @@ interface Props<TBackup extends { documents: readonly unknown[] }> extends Proje
   readonly onImport: (backup: TBackup, copies: boolean) => Promise<boolean>;
 }
 
-export function ProjectsPage<TBackup extends { documents: readonly unknown[] }>({ documents, summaries, portfolio, onPortfolio, onUndo, preferences, onPreferences, onOpen, onNew, onShift, onExport, onPreviewImport, onImport, ...actions }: Props<TBackup>) {
+export function ProjectsPage<TBackup extends { documents: readonly unknown[] }>({ serverMode = false, documents, summaries, portfolio, onPortfolio, onUndo, preferences, onPreferences, onOpen, onNew, onShift, onExport, onPreviewImport, onImport, ...actions }: Props<TBackup>) {
   const [archive, setArchive] = useState(location.hash === '#/archive');
   const [confirm, setConfirm] = useState<ProjectDocument | null>(null);
   useEffect(() => {
@@ -56,9 +57,9 @@ export function ProjectsPage<TBackup extends { documents: readonly unknown[] }>(
     </div></div></div><button className="primary-button" onClick={onNew}>+ Новый проект</button></header>
     {portfolio && <div className="projects-storage">
       <button onClick={() => { location.hash = archive ? '/projects' : '/archive'; }}>{archive ? 'Все проекты' : 'Архив'}</button>
-      <div><button aria-label="Отменить в портфеле" disabled={!portfolio.undo.length} onClick={() => { onUndo?.(false); }}>↶</button><button aria-label="Повторить в портфеле" disabled={!portfolio.redo.length} onClick={() => { onUndo?.(true); }}>↷</button></div>
+      {!serverMode && <div><button aria-label="Отменить в портфеле" disabled={!portfolio.undo.length} onClick={() => { onUndo?.(false); }}>↶</button><button aria-label="Повторить в портфеле" disabled={!portfolio.redo.length} onClick={() => { onUndo?.(true); }}>↷</button></div>}
     </div>}
-    <div className="projects-storage"><span>Данные хранятся в этом браузере · без синхронизации между устройствами</span><div><button onClick={() => { void exportFile(); }}>Экспортировать резервную копию JSON</button><button onClick={() => { file.current?.click(); }}>Импортировать JSON</button></div>
+    <div className="projects-storage"><span>{serverMode ? "Данные на сервере · Undo/Redo и импорт JSON пока недоступны. Вид портфеля — на время сеанса." : "Данные хранятся в этом браузере · без синхронизации между устройствами"}</span><div><button onClick={() => { void exportFile(); }}>Экспортировать резервную копию JSON</button>{!serverMode && <button onClick={() => { file.current?.click(); }}>Импортировать JSON</button>}</div>
       <input ref={file} type="file" accept=".json,application/json" aria-label="Файл резервной копии" hidden onChange={(event) => {
         const selected = event.target.files?.[0]; event.target.value = '';
         if (selected) void selected.text().then(onPreviewImport).then((result) => { if (result) { setPreview(result); setCopies(result.collisions > 0); } });

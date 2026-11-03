@@ -1,25 +1,10 @@
 import { z } from "zod";
-import { dateOnlySchema, viewPreferencesSchema } from "../src/domain/schema";
+import { dateOnlySchema } from "../src/domain/schema";
 import { peopleEnvelopeSchema } from "../src/domain/v2/people";
 
-const command = {
-  commandId: z.uuid(), version: z.literal(1), workspaceId: z.uuid(),
-  expectedRevision: z.number().int().nonnegative(),
-};
-export const createProjectSchema = z.strictObject({
-  ...command, name: z.string().trim().min(1).max(500),
-  description: z.string().max(20_000), startDate: dateOnlySchema,
-});
-export const workspaceCommandSchema = z.strictObject({
-  ...command,
-  command: z.discriminatedUnion("type", [
-    z.strictObject({ type: z.literal("ArchiveProject"), id: z.uuid(), archived: z.boolean() }),
-    z.strictObject({ type: z.literal("DuplicateProject"), id: z.uuid(), expectedProjectRevision: z.number().int().nonnegative() }),
-    z.strictObject({ type: z.literal("ReorderProjects"), order: z.array(z.uuid()).max(1000).refine((ids) => new Set(ids).size === ids.length) }),
-  ]),
-});
+export { createProjectSchema, workspaceCommandSchema, viewSchema } from "../src/application/v2/apiContracts";
+export type { CreateProject, WorkspaceCommand } from "../src/application/v2/apiContracts";
 export { peopleEnvelopeSchema };
-export const viewSchema = z.strictObject({ workspaceId: z.uuid(), value: viewPreferencesSchema });
 export const inviteSchema = z.strictObject({ email: z.email().max(254).transform((s) => s.toLowerCase()) });
 export const tokenSchema = z.strictObject({ token: z.string().regex(/^[\w-]{43}$/) });
 export const idParams = z.strictObject({ id: z.uuid() });
@@ -36,8 +21,6 @@ export function boundedInput(value: unknown, depth = 0): void {
   }
 }
 
-export type CreateProject = z.infer<typeof createProjectSchema>;
-export type WorkspaceCommand = z.infer<typeof workspaceCommandSchema>;
 
 /** Deliberately excludes people, contacts, assignments, preferences, history and auth. */
 export const guestProjectSchema = z.strictObject({

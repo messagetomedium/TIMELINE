@@ -2,8 +2,36 @@
 
 This stage prepares and tests a package. It creates no Timeweb resources, DNS,
 production database or users. Obtain separate authorization before those actions.
-The frontend still uses IndexedDB until V2.0: serving it next to the API does not
-migrate browser data or enable server-backed editing. Pages keeps its existing mode.
+V2.0A connects the existing frontend to this API. Fastify serves the built HTML
+with `APP_STORAGE_MODE=server` (default); the unchanged static Pages build contains
+`timeline-storage=local` and continues to use IndexedDB. No endpoint probing or
+fallback selects a mode. Set `STATIC_ROOT` to the frontend build directory for a
+same-origin server deployment; API cookies never go to another host. No Vite secret
+or API URL is embedded in the bundle. `APP_STORAGE_MODE=local` is an explicit
+operator choice for serving the local editor with Fastify.
+
+Server mode provides registration, verification/resend, login/logout and password
+reset through Better Auth. Use the existing operator bootstrap after verifying
+the owner email; registration never grants workspace membership. Production needs
+working SMTP and `APP_ORIGIN` set to the public HTTPS origin. Callback/reset links
+return to `/`, and mail tokens are removed from the browser URL and kept only in
+memory while the reset form is open.
+
+All content uses the existing revisioned command endpoints. One unacknowledged
+intent and unfinished text/date input survive reload in per-user **sessionStorage
+in the current tab**, separate from IndexedDB; this is not a second project store
+or offline edit queue. An uncertain outcome retries the identical command ID/body.
+A definite revision conflict retains the draft for explicit reload, comparison and
+reapplication. Closing the tab can remove that recovery draft; the browser warns
+while input or an acknowledgement is outstanding. Resolve or copy the draft before
+closing the tab. A failed API call never writes to IndexedDB or claims local save.
+
+Existing server API has no safe compensating Undo/Redo or JSON-import command:
+these controls are unavailable in server mode, with an explanation. JSON export
+uses the existing reads. Local import/history remain unchanged. Project view
+preferences use the existing per-user PUT endpoint; workspace/portfolio UI settings
+have no existing API endpoint and last for the current signed-in session. There is
+no automatic migration of local projects, realtime or new infrastructure.
 
 ## Build and local verification
 
@@ -185,3 +213,18 @@ After merge the workflow publishes each functional release automatically; option
 owner review does not block it. Codex 403 failures do not invalidate owner/ChatGPT
 publication confirmation. ChatGPT handles PR/merge/CI/Pages through the connected
 GitHub when Codex lacks API access. No further blocked-address retries are needed.
+
+## V2.0A targeted development checks
+
+After `npm ci` and `npm run build`, use a disposable PostgreSQL database whose name
+ends in `_test` (the fixtures clear **only that database**):
+
+```sh
+npm run test -- src/infrastructure/remote/RemoteCommandService.test.ts
+TEST_DATABASE_URL=postgresql://TEST_OPERATOR@127.0.0.1/timeline_server_test npm run server:test -- server/tests/frontend-api.test.ts server/tests/runtime.test.ts
+```
+
+Install Chromium with `npx playwright install chromium`, or set
+`PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to an existing local Chromium. These browser
+checks use real Fastify/Better Auth/PostgreSQL and record no screenshots or video.
+Full required suites run on the protected PR; Pages deployment keeps local mode.

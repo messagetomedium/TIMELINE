@@ -7,6 +7,7 @@ const settings = databaseSettingsSchema.extend({
   BETTER_AUTH_SECRET:z.string().min(32).refine((s) => !/REPLACE_WITH|CHANGE_ME/.test(s)),
   NODE_ENV:z.enum(["development","test","production"]).default("development"),
   PORT:z.coerce.number().int().min(0).max(65535).default(8080), HOST:z.string().default("127.0.0.1"),
+  APP_STORAGE_MODE:z.enum(["local","server"]).default("server"),
   STATIC_ROOT:z.string().min(1).optional(),
   TRUST_PROXY:z.string().default("").transform((s) => s.split(",").map((v) => v.trim()).filter(Boolean))
     .pipe(z.array(proxyAddress.refine((s) => !s.endsWith("/0")))),

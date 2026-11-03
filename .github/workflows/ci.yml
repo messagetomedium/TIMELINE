@@ -81,6 +81,8 @@ jobs:
       - run: npm run lint
         if: needs.changes.outputs.frontend != 'true'
       - run: npm run server:typecheck
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
       - run: npm run server:test
   package:
     needs: changes

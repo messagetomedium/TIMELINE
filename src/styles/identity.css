@@ -22,6 +22,8 @@
 .folder-tab > span { color: inherit; }
 .folder-tab:hover { background: var(--tl-blue-wash); color: var(--tl-blue-ikb); }
 .folder-tab.active { height: 54px; border-color: var(--tl-line-strong); background: var(--tl-white); color: var(--tl-ink); font-weight: 800; box-shadow: inset 0 3px var(--tl-blue-ikb); }
+/* Override legacy .header-project > span regardless of CSS chunk load order. */
+.folder-tab.active > span { color: inherit; }
 .folder-tabs::-webkit-scrollbar { display: none; }
 .folder-tab.active::after { content: ''; position: absolute; bottom: -1px; left: 0; right: 0; height: 2px; background: var(--tl-white); pointer-events: none; }
 .app-shell .folder-tab:focus-visible { outline-offset: -4px; }
