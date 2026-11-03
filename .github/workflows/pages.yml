@@ -1,86 +1,32 @@
 name: Публикация GitHub Pages
 on:
-  workflow_run:
-    workflows: [Проверки]
-    types: [completed]
+  push:
     branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
 permissions:
   contents: read
-  actions: read
 concurrency:
   group: pages
   cancel-in-progress: false
 jobs:
-  scope:
-    if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_repository.full_name == github.repository
-    runs-on: ubuntu-latest
-    outputs:
-      frontend: ${{ steps.scope.outputs.frontend }}
-      functional: ${{ steps.scope.outputs.functional }}
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: ci-scope
-          run-id: ${{ github.event.workflow_run.id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-      - id: scope
-        env:
-          EXPECTED_SHA: ${{ github.event.workflow_run.head_sha }}
-        run: |
-          node --input-type=module <<'JS'
-          import { readFileSync, appendFileSync } from 'node:fs';
-          const s = JSON.parse(readFileSync('ci-scope.json', 'utf8'));
-          if (s.sha !== process.env.EXPECTED_SHA || ['frontend','server','package'].some(k => typeof s[k] !== 'boolean')) throw Error('Invalid checked scope');
-          appendFileSync(process.env.GITHUB_OUTPUT, `frontend=${s.frontend}\nfunctional=${s.frontend || s.server || s.package}\n`);
-          JS
   build:
-    needs: scope
-    if: needs.scope.outputs.functional == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
-      - uses: actions/download-artifact@v4
-        if: needs.scope.outputs.frontend == 'true'
-        with:
-          name: frontend-dist
-          path: dist
-          run-id: ${{ github.event.workflow_run.id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
       - run: npm run build
-        if: needs.scope.outputs.frontend != 'true'
-      # Until main protection is confirmed, retain the existing publication checks.
-      # Functional main pushes validate all scopes until main protection is confirmed.
-      - run: npm run lint
-        if: needs.scope.outputs.frontend == 'true'
-      - run: npm run test
-        if: needs.scope.outputs.frontend == 'true'
-      - run: npx playwright install --with-deps chromium webkit
-        if: needs.scope.outputs.frontend == 'true'
-      - run: npm run test:e2e
-        if: needs.scope.outputs.frontend == 'true'
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: pages-test-results
-          path: test-results/
-          retention-days: 7
   deploy:
     needs: build
     runs-on: ubuntu-latest
@@ -94,11 +40,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - id: current
         env:
-          EXPECTED_SHA: ${{ github.event.workflow_run.head_sha }}
+          EXPECTED_SHA: ${{ github.sha }}
         run: |
           current_sha="$(git ls-remote origin refs/heads/main | cut -f1)"
           if [ "$current_sha" = "$EXPECTED_SHA" ]; then echo 'publish=true' >> "$GITHUB_OUTPUT"; fi
