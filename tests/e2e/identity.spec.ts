@@ -50,12 +50,12 @@ test("responsive document surfaces retain controls, local Cyrillic typography, r
       let background: [number, number, number] = [255, 255, 255];
       for (const node of ancestry.reverse()) {
         const layer = parse(getComputedStyle(node).backgroundColor);
-        background = background.map((v, i) => layer.rgb[i]! * layer.a + v * (1 - layer.a)) as typeof background;
+        background = background.map((v, i) => (layer.rgb[i] ?? 0) * layer.a + v * (1 - layer.a)) as typeof background;
       }
       const text = parse(getComputedStyle(element).color);
-      const foreground = text.rgb.map((v, i) => v * text.a + background[i]! * (1 - text.a));
+      const foreground = text.rgb.map((v, i) => v * text.a + (background[i] ?? 255) * (1 - text.a));
       const luminance = (rgb: number[]) => rgb.map((v) => v / 255).map((v) => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4)
-        .reduce((sum, v, i) => sum + v * [.2126, .7152, .0722][i]!, 0);
+        .reduce((sum, v, i) => sum + v * ([.2126, .7152, .0722][i] ?? 0), 0);
       const left = luminance(foreground), right = luminance(background);
       return (Math.max(left, right) + .05) / (Math.min(left, right) + .05);
     })).toBeGreaterThanOrEqual(4.5);
