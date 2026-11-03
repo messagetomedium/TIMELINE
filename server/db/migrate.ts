@@ -2,8 +2,9 @@ import { readMigrationFiles } from "drizzle-orm/migrator";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { drizzle } from "drizzle-orm/node-postgres";
 import type { Pool, PoolClient } from "pg";
-import { fileURLToPath } from "node:url";
-const folder=fileURLToPath(new URL("./migrations",import.meta.url));
+import { resolve } from "node:path";
+// Source scripts and the compiled image run from the repository/application root.
+const folder=resolve("server/db/migrations");
 async function applied(client:Pool|PoolClient) {
   const exists=await client.query<{table_name:string|null}>("select to_regclass('drizzle.__drizzle_migrations')::text as table_name");
   if(!exists.rows[0]?.table_name)return [];
