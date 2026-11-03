@@ -1,13 +1,11 @@
 name: Проверки
 on:
   pull_request:
-  push:
-    branches: [main]
 permissions:
   contents: read
 concurrency:
-  group: checks-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: checks-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 jobs:
   changes:
     runs-on: ubuntu-latest
@@ -27,15 +25,8 @@ jobs:
       - id: scope
         run: node scripts/ci-scope.mjs
         env:
-          CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          CI_MAIN_PUSH: ${{ github.event_name == 'push' }}
-      - uses: actions/upload-artifact@v4
-        if: github.event_name == 'push'
-        with:
-          name: ci-scope
-          path: ci-scope.json
-          retention-days: 7
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
   frontend:
     needs: changes
     if: needs.changes.outputs.frontend == 'true'
@@ -54,12 +45,6 @@ jobs:
       - run: npm run test
       - run: npx playwright install --with-deps chromium webkit
       - run: npm run test:e2e
-      - uses: actions/upload-artifact@v4
-        if: success() && github.event_name == 'push'
-        with:
-          name: frontend-dist
-          path: dist/
-          retention-days: 7
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

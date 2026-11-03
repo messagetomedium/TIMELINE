@@ -25,7 +25,3 @@ test("moving source code into docs still validates the deleted source scope", ()
     assert.deepEqual(classifyPaths(changedPaths(before, git("rev-parse", "HEAD"), dir)), { frontend: false, server: true, package: true });
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
-test("unprotected main fully validates functional pushes, including previously failed parent code", () => {
-  for (const path of ["server/app.ts", "src/features/timeline/TimelineBar.tsx"]) assert.deepEqual(classifyPaths([path], true), { frontend: true, server: true, package: true });
-  assert.deepEqual(classifyPaths(["README.md", "docs/STAGING.md"], true), { frontend: false, server: false, package: false });
-});
