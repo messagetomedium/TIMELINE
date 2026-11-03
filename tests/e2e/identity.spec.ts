@@ -35,15 +35,15 @@ test("responsive document surfaces retain controls, local Cyrillic typography, r
     await page.setViewportSize(size);
     const main=page.getByRole("main",{name:"Редактор таймлайна"});
     await expect(main).toBeVisible();
-    const tabContrast = await page.locator(".folder-tab.active > span").evaluate((element) => {
+    // Wait for navigation/stylesheet transitions to settle; keep the WCAG contrast threshold.
+    await expect.poll(() => page.locator(".folder-tab.active > span").evaluate((element) => {
       const luminance = (color:string) => {
         const values = (color.match(/[\d.]+/g) ?? []).slice(0,3).map(Number).map((v) => v/255).map((v) => v<=.04045 ? v/12.92 : ((v+.055)/1.055)**2.4);
         return (values[0] ?? 0)*.2126 + (values[1] ?? 0)*.7152 + (values[2] ?? 0)*.0722;
       };
       const text=luminance(getComputedStyle(element).color), background=luminance(getComputedStyle(element.parentElement ?? element).backgroundColor);
       return (Math.max(text,background)+.05)/(Math.min(text,background)+.05);
-    });
-    expect(tabContrast).toBeGreaterThanOrEqual(4.5);
+    })).toBeGreaterThanOrEqual(4.5);
     await expect(page.locator(".editor-heading h1")).toHaveAttribute("title",original.project.name);
     expect(await page.locator(".process-bar").first().evaluate((e)=>getComputedStyle(e).height)).toBe("24px");
     expect(await page.locator(".task-bar").first().evaluate((e)=>getComputedStyle(e).height)).toBe("22px");
