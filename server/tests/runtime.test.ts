@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { registerFrontend } from "../frontend";
 import { readConfig } from "../config";
-import { databaseTls } from "../db/settings";
+import { assertDatabaseTransport, databaseTls } from "../db/settings";
 
 const env = { DATABASE_URL: "postgresql://app@localhost/test", APP_ORIGIN: "https://timeline.example.test", BETTER_AUTH_SECRET: "a-valid-synthetic-test-secret-with-more-than-32-chars", NODE_ENV: "production", MAILER_MODE: "smtp", SMTP_HOST: "localhost", DB_SSL_MODE: "verify-full" };
 it("production runtime validates verified TLS, trusted proxy scope and placeholder secrets", () => {
@@ -37,4 +37,17 @@ it("static frontend uses an explicit allowlist, same-origin policy and blocks fi
     for (const path of ["/assets/leak.js", "/assets/%2e%2e/private.js", "/assets/%2e%2e%2fprivate.js", "/assets/file.map", "/api/missing", "/.env"]) expect((await app.inject(path)).statusCode).toBe(404);
     expect((await app.inject({ method: "HEAD", url: "/" })).body).toBe("");
   } finally { await app.close(); await rm(directory, { recursive: true }); }
+});
+
+it("production plaintext is allowed only for the explicitly scoped internal Compose service, including operator URLs", () => {
+  const internal = { ...env, DB_SSL_MODE: "disable", DB_CONNECTION_SCOPE: "docker-internal", DATABASE_URL: "postgresql://app@postgres:5432/timeline" };
+  expect(databaseTls(readConfig(internal))).toBe(false);
+  expect(() => { assertDatabaseTransport(internal.DATABASE_URL, readConfig(internal), "production"); }).not.toThrow();
+  for (const url of ["postgresql://app@db.example.test/timeline", "postgresql://app@127.0.0.1/timeline", "postgresql://app@10.0.0.1/timeline", "postgresql://app@postgres.evil.test/timeline", "postgresql://app@postgres:5433/timeline", "postgresql://app@postgres:5432/timeline?host=remote.example.test", "postgresql://app@postgres/timeline?port=6432"]) {
+    expect(() => readConfig({ ...internal, DATABASE_URL: url })).toThrow("Invalid server settings");
+    expect(() => { assertDatabaseTransport(url, readConfig(internal), "production"); }).toThrow("Production database requires");
+  }
+  expect(() => readConfig({ ...internal, DB_CONNECTION_SCOPE: "remote" })).toThrow();
+  expect(() => readConfig({ ...internal, DB_CONNECTION_SCOPE: undefined })).toThrow();
+  expect(() => readConfig({ ...env, DB_CONNECTION_SCOPE: "docker-internal", DATABASE_URL: "postgresql://app@db.example.test/timeline" })).not.toThrow();
 });

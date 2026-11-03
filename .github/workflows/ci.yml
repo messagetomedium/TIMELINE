@@ -96,6 +96,9 @@ jobs:
         with:
           node-version-file: .nvmrc
       - run: docker build -t timeline:ci .
+      - run: sudo --preserve-env=TIMELINE_TEST_IMAGE "$(command -v node)" --test tests/package/vps.test.mjs
+        env:
+          TIMELINE_TEST_IMAGE: timeline:ci
       - run: npm run test:package
         env:
           TIMELINE_TEST_IMAGE: timeline:ci

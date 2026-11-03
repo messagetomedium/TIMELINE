@@ -2,13 +2,13 @@ import { z } from "zod";
 import { connect } from "./db/connection";
 import { assertMigrations, migrateDatabase } from "./db/migrate";
 import { bootstrapOwner } from "./access";
-import { databaseSettingsSchema, databaseUrlSchema } from "./db/settings";
+import { assertDatabaseTransport, databaseSettingsSchema, databaseUrlSchema } from "./db/settings";
 
 let connection: ReturnType<typeof connect> | undefined;
 try {
   const url = databaseUrlSchema.parse(process.env.MIGRATION_DATABASE_URL);
   const settings = databaseSettingsSchema.parse(process.env);
-  if (process.env.NODE_ENV === "production" && settings.DB_SSL_MODE !== "verify-full") throw Error("Verified TLS required");
+  assertDatabaseTransport(url, settings);
   connection = connect(url, settings);
   const command = process.argv[2];
   if (command === "migrate") await migrateDatabase(connection.pool);

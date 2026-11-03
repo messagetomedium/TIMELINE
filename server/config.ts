@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { databaseSettingsSchema, databaseUrlSchema } from "./db/settings";
+import { assertDatabaseTransport, databaseSettingsSchema, databaseUrlSchema } from "./db/settings";
 const proxyAddress = z.union([z.ipv4(), z.ipv6(), z.cidrv4(), z.cidrv6()]);
 const settings = databaseSettingsSchema.extend({
   DATABASE_URL:databaseUrlSchema,
@@ -15,7 +15,7 @@ const settings = databaseSettingsSchema.extend({
 }).superRefine((c,ctx)=>{
   if(c.NODE_ENV==="production"&&!c.APP_ORIGIN.startsWith("https://"))ctx.addIssue({code:"custom",path:["APP_ORIGIN"],message:"HTTPS required"});
   if(c.NODE_ENV==="production"&&c.MAILER_MODE!=="smtp")ctx.addIssue({code:"custom",path:["MAILER_MODE"],message:"SMTP required"});
-  if(c.NODE_ENV==="production"&&c.DB_SSL_MODE!=="verify-full")ctx.addIssue({code:"custom",path:["DB_SSL_MODE"],message:"Verified database TLS required"});
+  try { assertDatabaseTransport(c.DATABASE_URL, c, c.NODE_ENV); } catch { ctx.addIssue({code:"custom",path:["DB_SSL_MODE"],message:"Verified TLS or isolated Compose postgres required"}); }
   if(c.MAILER_MODE==="smtp"&&!c.SMTP_HOST)ctx.addIssue({code:"custom",path:["SMTP_HOST"],message:"SMTP host required"});
 });
 export type Config=z.infer<typeof settings>;

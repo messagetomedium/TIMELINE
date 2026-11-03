@@ -19,3 +19,6 @@ backups
 .env
 .env.*
 *.tsbuildinfo
+
+# VPS secrets, dumps, restore scratch and operator configuration
+deploy/vps/state/
