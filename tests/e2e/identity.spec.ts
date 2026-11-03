@@ -35,42 +35,15 @@ test("responsive document surfaces retain controls, local Cyrillic typography, r
     await page.setViewportSize(size);
     const main=page.getByRole("main",{name:"Редактор таймлайна"});
     await expect(main).toBeVisible();
-    // Contrast uses the visible composite background, not transparent rgba(0,0,0,0)
-    // interpreted as an opaque black surface. Keep the WCAG 4.5:1 threshold.
-    let diagnosed = false;
-    await expect.poll(async () => {
-      const measurement = await page.locator(".folder-tab.active > span").evaluate((element) => {
-      type RGBA = { rgb: [number, number, number]; a: number };
-      const parse = (value: string): RGBA => {
-        if (value === "transparent") return { rgb: [0, 0, 0], a: 0 };
-        const vals = (value.match(/[\d.]+/g) ?? []).map(Number);
-        const scale = value.startsWith("color(") ? 255 : 1;
-        return { rgb: [0, 1, 2].map((i) => (vals[i] ?? 0) * scale) as RGBA["rgb"], a: vals[3] ?? 1 };
+    const tabContrast = await page.locator(".folder-tab.active > span").evaluate((element) => {
+      const luminance = (color:string) => {
+        const values = (color.match(/[\d.]+/g) ?? []).slice(0,3).map(Number).map((v) => v/255).map((v) => v<=.04045 ? v/12.92 : ((v+.055)/1.055)**2.4);
+        return (values[0] ?? 0)*.2126 + (values[1] ?? 0)*.7152 + (values[2] ?? 0)*.0722;
       };
-      const ancestry: Element[] = [];
-      for (let node = element.parentElement; node; node = node.parentElement) ancestry.push(node);
-      let background: [number, number, number] = [255, 255, 255];
-      for (const node of ancestry.reverse()) {
-        const layer = parse(getComputedStyle(node).backgroundColor);
-        background = background.map((v, i) => (layer.rgb[i] ?? 0) * layer.a + v * (1 - layer.a)) as typeof background;
-      }
-      const text = parse(getComputedStyle(element).color);
-      const foreground = text.rgb.map((v, i) => v * text.a + (background[i] ?? 255) * (1 - text.a));
-      const luminance = (rgb: number[]) => rgb.map((v) => v / 255).map((v) => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4)
-        .reduce((sum, v, i) => sum + v * ([.2126, .7152, .0722][i] ?? 0), 0);
-      const left = luminance(foreground), right = luminance(background);
-      return { contrast: (Math.max(left, right) + .05) / (Math.min(left, right) + .05),
-        viewport: innerWidth, foregroundCss: getComputedStyle(element).color,
-        tabBackgroundCss: getComputedStyle(element.parentElement ?? element).backgroundColor,
-        ancestry: ancestry.map((node) => ({ node: node.tagName, cls: node.className.slice(0, 80), bg: getComputedStyle(node).backgroundColor })),
-        blendedBackground: background, parsedForeground: foreground };
-      });
-      if (measurement.contrast < 4.5 && !diagnosed) {
-        diagnosed = true;
-        console.log("TAB_CONTRAST_DIAGNOSTIC", JSON.stringify(measurement));
-      }
-      return measurement.contrast;
-    }).toBeGreaterThanOrEqual(4.5);
+      const text=luminance(getComputedStyle(element).color), background=luminance(getComputedStyle(element.parentElement ?? element).backgroundColor);
+      return (Math.max(text,background)+.05)/(Math.min(text,background)+.05);
+    });
+    expect(tabContrast).toBeGreaterThanOrEqual(4.5);
     await expect(page.locator(".editor-heading h1")).toHaveAttribute("title",original.project.name);
     expect(await page.locator(".process-bar").first().evaluate((e)=>getComputedStyle(e).height)).toBe("24px");
     expect(await page.locator(".task-bar").first().evaluate((e)=>getComputedStyle(e).height)).toBe("22px");
