@@ -1,3 +1,4 @@
+import { effectiveActive } from "../../domain/v2/activity";
 import { DateRange } from "../projects/DateRange";
 import { barGeometry } from '../../domain/barGeometry';
 import type { SceneBar } from '../../domain/barGeometry';
@@ -183,11 +184,11 @@ export function TimelineWorkspace({ document, onCommit, initialView, onViewChang
           <DateLines document={sceneDocument} camera={sceneCamera} today={today} height={bodyHeight} />
           {foundation?.checkpoints(sceneCamera, gesture.snapshot, gesture.startCheckpoint)}
           {layout.rows.flatMap((row) => {
-            if (row.kind === 'process') return sceneDocument.processes.filter((item) => item.laneId === row.id).map((process) => <TimelineBar key={process.id} geometry={barGeometry({id:process.id,startDate:process.startDate,endDateExclusive:process.endDateExclusive,y:row.y},sceneBars,sceneCamera)} item={process} target={{ kind: 'process', id: process.id }} camera={sceneCamera} viewportWidth={width} y={row.y} color={process.color}
+            if (row.kind === 'process') return sceneDocument.processes.filter((item) => item.laneId === row.id).map((process) => <TimelineBar inactive={foundation ? !(gesture.snapshot ?? foundation.snapshot).processes.find((p) => p.id === process.id)?.isActive : false} key={process.id} geometry={barGeometry({id:process.id,startDate:process.startDate,endDateExclusive:process.endDateExclusive,y:row.y},sceneBars,sceneCamera)} item={process} target={{ kind: 'process', id: process.id }} camera={sceneCamera} viewportWidth={width} y={row.y} color={process.color}
               selected={validMulti?.kind==='process'?validMulti.ids.includes(process.id):selection?.id===process.id} highlighted={hoverIds.has(process.id) || gesture.affectedIds.includes(process.id)} expanded={sceneExpanded.has(process.id)} toggle={() => { toggle(process.id); }} onSelect={select} onRename={rename} onHover={setHovered} onGesture={startBar} />);
             return sceneDocument.tasks.filter((item) => item.laneId === row.id).map((task) => {
               const process = sceneDocument.processes.find((item) => item.id === task.processId);
-              return <TimelineBar key={task.id} geometry={barGeometry({id:task.id,startDate:task.startDate,endDateExclusive:task.endDateExclusive,y:row.y},sceneBars,sceneCamera)} item={task} target={{ kind: 'task', id: task.id }} camera={sceneCamera} viewportWidth={width} y={row.y} color={process?.color ?? '#888888'}
+              return <TimelineBar inactive={foundation ? !effectiveActive(gesture.snapshot ?? foundation.snapshot, (gesture.snapshot ?? foundation.snapshot).tasks.find((t) => t.id === task.id) ?? {isActive:true}) : false} key={task.id} geometry={barGeometry({id:task.id,startDate:task.startDate,endDateExclusive:task.endDateExclusive,y:row.y},sceneBars,sceneCamera)} item={task} target={{ kind: 'task', id: task.id }} camera={sceneCamera} viewportWidth={width} y={row.y} color={process?.color ?? '#888888'}
                 selected={validMulti?.kind==='task'?validMulti.ids.includes(task.id):selection?.id===task.id} highlighted={hoverIds.has(task.id) || gesture.affectedIds.includes(task.id)} expanded={false} toggle={undefined} onSelect={select} onRename={rename} onHover={setHovered} onGesture={startBar} />;
             });
           })}

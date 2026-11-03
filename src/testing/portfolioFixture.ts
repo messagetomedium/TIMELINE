@@ -11,11 +11,11 @@ export function portfolioFixture() {
     if (!stage) throw Error("Fixture stage missing");
     const processId = processIdSchema.parse(crypto.randomUUID()), laneId = laneIdSchema.parse(crypto.randomUUID());
     d.lanes.push({ ...scope, id: laneId, kind: "process", stageId: stage.id, processId: null, sortIndex: i });
-    d.processes.push({ ...scope, id: processId, laneId, stageId: stage.id, title: `Процесс ${String(i + 1)}`, startDate: stage.startDate, endDateExclusive: stage.endDateExclusive, sortIndex: i, revision: 0, color: "#678b72", status: "Не начато", details: "" });
+    d.processes.push({ ...scope, isActive: true, id: processId, laneId, stageId: stage.id, title: `Процесс ${String(i + 1)}`, startDate: stage.startDate, endDateExclusive: stage.endDateExclusive, sortIndex: i, revision: 0, color: "#678b72", status: "Не начато", details: "" });
     for (let j = 0; j < 40; j++) {
       const taskLane = laneIdSchema.parse(crypto.randomUUID());
       d.lanes.push({ ...scope, id: taskLane, kind: "task", processId, sortIndex: j });
-      d.tasks.push({ ...scope, id: taskIdSchema.parse(crypto.randomUUID()), processId, laneId: taskLane, title: `Задача ${String(i + 1)}.${String(j + 1)}`, startDate: stage.startDate, endDateExclusive: stage.endDateExclusive, sortIndex: j, revision: 0, status: "Не начато", details: "" });
+      d.tasks.push({ ...scope, isActive: true, id: taskIdSchema.parse(crypto.randomUUID()), processId, laneId: taskLane, title: `Задача ${String(i + 1)}.${String(j + 1)}`, startDate: stage.startDate, endDateExclusive: stage.endDateExclusive, sortIndex: j, revision: 0, status: "Не начато", details: "" });
     }
   }
   d.viewPreferences = { ...d.viewPreferences, expandedProcessIds: [] };

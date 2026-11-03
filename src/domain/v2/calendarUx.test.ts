@@ -136,7 +136,7 @@ describe("atomic date inspectors", () => {
     );
     expect(next.project.revision).toBe(1);
   });
-  it("rejects work cropping, stage inversion, empty dates and preserves no-op identity", () => {
+  it("requires a cropping decision, rejects empty dates and preserves no-op identity", () => {
     const d = make();
     expect(() =>
       applyCommand(d, {
@@ -144,7 +144,7 @@ describe("atomic date inspectors", () => {
         startDate: addDays(d.project.startDate, 1),
         endDateExclusive: d.project.endDateExclusive,
       }),
-    ).toThrow("обрезают");
+    ).toThrow("Выберите");
     expect(() =>
       applyCommand(d, {
         type: "ResizeProjectRange",

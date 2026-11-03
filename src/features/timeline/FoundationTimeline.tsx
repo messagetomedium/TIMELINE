@@ -7,6 +7,7 @@ import type { CatalogState } from "../../domain/v2/peopleModel";
 import { statusSchema } from "../../domain/schema";
 import { CheckpointHeaders, CheckpointLines } from "./CheckpointLayer";
 import { CalendarShading } from "./CalendarShading";
+import { ProjectRangeEditor } from "./ProjectRangeEditor";
 import { DateRangeEditor } from "./DateRangeEditor";
 import { WorkActions, CreateWorkForm } from "./WorkActions";
 import type { WorkKind } from "../../domain/v2/work";
@@ -588,6 +589,10 @@ function FoundationInspector({
         item &&
         "status" in item && (
           <>
+            <label className="inspector-checkbox">
+              <input type="checkbox" checked={!item.isActive} onKeyDown={checkboxEnter} onChange={(e) => { void onCommand({ type: "SetWorkActive", kind: target.kind, id: target.id, value: !e.target.checked }); }} />
+              Неактивно
+            </label>
             <label className="inspector-label">
               Статус
               <select
@@ -782,30 +787,7 @@ function FoundationInspector({
         </label>
       )}
       {target.kind === "project" && (
-        <DateRangeEditor
-          key={`project-range:${target.id}`}
-          start={snapshot.project.startDate}
-          endExclusive={snapshot.project.endDateExclusive}
-          apply={(startDate, endDateExclusive) =>
-            onCommand({
-              type: "ResizeProjectRange",
-              startDate,
-              endDateExclusive,
-            })
-          }
-          validate={(startDate, endDateExclusive) => {
-            try {
-              planCommand(snapshot, {
-                type: "ResizeProjectRange",
-                startDate,
-                endDateExclusive,
-              });
-              return null;
-            } catch (e) {
-              return e instanceof Error ? e.message : "Проверьте границы";
-            }
-          }}
-        />
+        <ProjectRangeEditor key={`project-range:${target.id}`} snapshot={snapshot} onCommand={onCommand} />
       )}
 
       <p className="inspector-note">

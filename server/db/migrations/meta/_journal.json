@@ -15,6 +15,13 @@
       "when": 1793549650241,
       "tag": "0001_hot_bloodscream",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793710186158,
+      "tag": "0002_salty_katie_power",
+      "breakpoints": true
     }
   ]
 }

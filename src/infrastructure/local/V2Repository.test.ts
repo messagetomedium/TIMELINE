@@ -1,3 +1,4 @@
+import { semantic } from "../../application/v2/history";
 import { required } from "../../testing/required";
 import "fake-indexeddb/auto";
 import { afterEach, expect, it } from "vitest";
@@ -26,6 +27,29 @@ const input = {
   description: "",
   startDate: dateOnly("2026-11-02"),
 };
+it("V1.6A.1 keeps activity, boundaries and one persistent undo across reopening and JSON import", async () => {
+  const { service, repo, db } = setup();
+  const id = await service.create(input), before = required(await repo.load(id));
+  await service.execute(service.envelope(before, { type: "ResizeProjectRange", startDate: dateOnly("2026-11-04"), endDateExclusive: dateOnly("2026-11-11"), effect: "deactivate" }));
+  const after = required(await repo.load(id));
+  expect(after.project.revision).toBe(before.project.revision + 1);
+  db.close();
+  const reopened = new V2Database(db.name), nextRepo = new V2Repository(reopened), next = new CommandService(nextRepo);
+  try {
+    await next.undo(id);
+    expect(required(await nextRepo.load(id)).processes.map((p) => p.isActive)).toEqual(before.processes.map((p) => p.isActive));
+    expect(required(await nextRepo.load(id)).project.startDate).toBe(before.project.startDate);
+    await next.undo(id, true);
+    const redone = required(await nextRepo.load(id));
+    expect(semantic(redone)).toBe(semantic(after));
+    const backup = await next.exportBackup();
+    const imported = setup();
+    await imported.service.importBackup((await imported.service.previewImport(backup)).backup, false);
+    expect(required(await imported.repo.load(id)).processes).toEqual(redone.processes);
+    expect(required(await imported.repo.load(id)).tasks).toEqual(redone.tasks);
+  } finally { reopened.close(); }
+});
+
 it("persists scoped commands and keeps separate undo/redo stacks across project navigation", async () => {
   const { repo, service, db } = setup();
   const a = await service.create(input),
