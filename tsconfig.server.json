@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.node.json",
+  "compilerOptions": { "noImplicitReturns": true, "noFallthroughCasesInSwitch": true },
+  "include": ["server", "drizzle.config.ts", "vitest.server.config.ts"]
+}

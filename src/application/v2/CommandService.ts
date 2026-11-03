@@ -1,3 +1,4 @@
+import { cloneProject } from "./cloneProject";
 import type { PortfolioCommand } from "./portfolio";
 import {
   newPerson,
@@ -275,50 +276,8 @@ export class CommandService {
       history,
     );
   }
-  clone(source: Snapshot, ids = new Map<string, string>()) {
-    for (const value of [
-      source.project,
-      ...source.stages,
-      ...source.lanes,
-      ...source.processes,
-      ...source.tasks,
-      ...source.checkpoints,
-      ...source.results,
-      ...source.assignments,
-    ])
-      ids.set(value.id, this.id());
-    // Replace UUID values only, never text that happens to contain an ID.
-    const links = new Set([
-      "id",
-      "projectId",
-      "stageId",
-      "resultId",
-      "targetId",
-      "personId",
-      "processId",
-      "laneId",
-      "expandedProcessIds",
-    ]);
-    const remap = (v: unknown, key = ""): unknown =>
-      typeof v === "string" && links.has(key)
-        ? (ids.get(v) ?? v)
-        : Array.isArray(v)
-          ? v.map((x) => remap(x, key))
-          : v && typeof v === "object"
-            ? Object.fromEntries(
-                Object.entries(v).map(([k, x]) => [k, remap(x, k)]),
-              )
-            : v;
-    const d = snapshotSchema.parse(remap(source));
-    const now = this.now();
-    d.project = {
-      ...d.project,
-      name: `${source.project.name} — копия`,
-      revision: 0,
-      createdAt: now,
-      updatedAt: now,
-    };
-    return d;
+  clone(source: Snapshot, ids = new Map<string,string>()) {
+    return cloneProject(source,this.id,this.now,ids);
   }
   async screen(id: string | null) {
     const [documents, preferences, views, catalog, portfolio] = await Promise.all([

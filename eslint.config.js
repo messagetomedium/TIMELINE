@@ -9,7 +9,7 @@ export default tseslint.config(
     files: ['**/*.ts', '**/*.tsx'],
     extends: [js.configs.recommended, ...tseslint.configs.strictTypeChecked],
     languageOptions: {
-      parserOptions: { project: ['./tsconfig.app.json', './tsconfig.node.json'], tsconfigRootDir: import.meta.dirname },
+      parserOptions: { project: ['./tsconfig.app.json', './tsconfig.node.json', './tsconfig.server.json'], tsconfigRootDir: import.meta.dirname },
     },
   },
   {
