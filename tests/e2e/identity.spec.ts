@@ -37,7 +37,9 @@ test("responsive document surfaces retain controls, local Cyrillic typography, r
     await expect(main).toBeVisible();
     // Contrast uses the visible composite background, not transparent rgba(0,0,0,0)
     // interpreted as an opaque black surface. Keep the WCAG 4.5:1 threshold.
-    await expect.poll(() => page.locator(".folder-tab.active > span").evaluate((element) => {
+    let diagnosed = false;
+    await expect.poll(async () => {
+      const measurement = await page.locator(".folder-tab.active > span").evaluate((element) => {
       type RGBA = { rgb: [number, number, number]; a: number };
       const parse = (value: string): RGBA => {
         if (value === "transparent") return { rgb: [0, 0, 0], a: 0 };
@@ -57,8 +59,18 @@ test("responsive document surfaces retain controls, local Cyrillic typography, r
       const luminance = (rgb: number[]) => rgb.map((v) => v / 255).map((v) => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4)
         .reduce((sum, v, i) => sum + v * ([.2126, .7152, .0722][i] ?? 0), 0);
       const left = luminance(foreground), right = luminance(background);
-      return (Math.max(left, right) + .05) / (Math.min(left, right) + .05);
-    })).toBeGreaterThanOrEqual(4.5);
+      return { contrast: (Math.max(left, right) + .05) / (Math.min(left, right) + .05),
+        viewport: innerWidth, foregroundCss: getComputedStyle(element).color,
+        tabBackgroundCss: getComputedStyle(element.parentElement ?? element).backgroundColor,
+        ancestry: ancestry.map((node) => ({ node: node.tagName, cls: String(node.className).slice(0, 80), bg: getComputedStyle(node).backgroundColor })),
+        blendedBackground: background, parsedForeground: foreground };
+      });
+      if (measurement.contrast < 4.5 && !diagnosed) {
+        diagnosed = true;
+        console.log("TAB_CONTRAST_DIAGNOSTIC", JSON.stringify(measurement));
+      }
+      return measurement.contrast;
+    }).toBeGreaterThanOrEqual(4.5);
     await expect(page.locator(".editor-heading h1")).toHaveAttribute("title",original.project.name);
     expect(await page.locator(".process-bar").first().evaluate((e)=>getComputedStyle(e).height)).toBe("24px");
     expect(await page.locator(".task-bar").first().evaluate((e)=>getComputedStyle(e).height)).toBe("22px");
