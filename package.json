@@ -22,7 +22,12 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx --env-file-if-exists=.env server/cli.ts migrate",
     "db:status": "tsx --env-file-if-exists=.env server/cli.ts status",
-    "server:bootstrap": "tsx --env-file-if-exists=.env server/cli.ts bootstrap"
+    "server:bootstrap": "tsx --env-file-if-exists=.env server/cli.ts bootstrap",
+    "server:build": "vite build --config vite.server.config.ts",
+    "db:backup": "tsx --env-file-if-exists=.env server/backup-cli.ts dump",
+    "db:backup:verify": "tsx --env-file-if-exists=.env server/backup-cli.ts dump-verify",
+    "db:restore:verify": "tsx --env-file-if-exists=.env server/backup-cli.ts verify",
+    "test:package": "node --test tests/package/smoke.test.mjs"
   },
   "dependencies": {
     "@better-auth/drizzle-adapter": "1.7.15",

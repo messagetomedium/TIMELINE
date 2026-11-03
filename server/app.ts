@@ -21,13 +21,14 @@ import { Guests } from "./guests";
 import { ApiError, requireValue } from "./errors";
 import { boundedInput, createProjectSchema, idParams, inviteSchema, peopleEnvelopeSchema, tokenSchema, viewSchema, workspaceCommandSchema } from "./dto";
 import type { FastifyRequest } from "fastify";
+import { registerFrontend } from "./frontend";
 
 const querySchema = z.strictObject({ workspaceId: z.uuid().default(WORKSPACE_ID) });
 const listSchema = querySchema.extend({ limit: z.coerce.number().int().min(1).max(100).default(40), offset: z.coerce.number().int().min(0).max(1_000_000).default(0) });
 const guestCookieName = "timeline_guest";
 
 export async function createApp(config: Config, suppliedMailer?: Mailer) {
-  const { db, pool } = connect(config.DATABASE_URL);
+  const { db, pool } = connect(config.DATABASE_URL, config);
   const mailer = suppliedMailer ?? createMailer(config);
   try {
     await assertMigrations(pool);
@@ -39,7 +40,7 @@ export async function createApp(config: Config, suppliedMailer?: Mailer) {
     throw error;
   }
   // Automatic URL/body logging would expose verification and reset tokens.
-  const app = Fastify({ logger: false, trustProxy: false, bodyLimit: 256 * 1024, requestTimeout: 15_000, routerOptions: { maxParamLength: 128 } });
+  const app = Fastify({ logger: false, trustProxy: config.TRUST_PROXY.length ? config.TRUST_PROXY : false, bodyLimit: 256 * 1024, requestTimeout: 15_000, routerOptions: { maxParamLength: 128 } });
   const auth = createAuth(db, config, mailer), commands = new ServerCommands(db), members = new Members(db, config, mailer), guests = new Guests(db);
   await app.register(rateLimit, { global: true, max: 300, timeWindow: "1 minute" });
   app.addHook("onClose", async () => { mailer.close(); await pool.end(); });
@@ -172,5 +173,7 @@ export async function createApp(config: Config, suppliedMailer?: Mailer) {
   });
   // Explicit no-data 404; unknown API paths never fall through to a SPA.
   app.setNotFoundHandler((_request, reply) => reply.code(404).send({ error: "NOT_FOUND" }));
+  try { if (config.STATIC_ROOT) await registerFrontend(app, config.STATIC_ROOT); }
+  catch (error) { await app.close(); throw error; }
   return { app, auth, db, pool, mailer };
 }

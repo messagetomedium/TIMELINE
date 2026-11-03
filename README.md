@@ -10,7 +10,7 @@
 зафиксированы в lockfile. Проверены официальные [Fastify LTS](https://github.com/fastify/fastify/blob/main/docs/Reference/LTS.md),
 [Better Auth / Fastify](https://www.better-auth.com/docs/integrations/fastify)
 и [Drizzle adapter](https://www.better-auth.com/docs/adapters/drizzle).
-Docker, размещение и подключение frontend к API — последующие этапы.
+Docker-пакет, staging, backup/restore и CI описаны в [docs/STAGING.md](docs/STAGING.md). Подключение frontend к API остаётся для V2.0.
 
 1. Создать пустую БД `timeline`, отдельную учётку оператора миграций (владелец
    БД/таблиц) и runtime-роль `timeline_app` с LOGIN, без SUPERUSER, CREATEDB,

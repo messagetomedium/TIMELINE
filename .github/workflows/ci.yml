@@ -1,11 +1,74 @@
 name: Проверки
-on: [push, pull_request]
-
+on:
+  pull_request:
+  push:
+    branches: [main]
 permissions:
   contents: read
-
+concurrency:
+  group: checks-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.scope.outputs.frontend }}
+      server: ${{ steps.scope.outputs.server }}
+      package: ${{ steps.scope.outputs.package }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - run: node --test tests/package/ci-scope.test.mjs
+      - id: scope
+        run: node scripts/ci-scope.mjs
+        env:
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          CI_MAIN_PUSH: ${{ github.event_name == 'push' }}
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push'
+        with:
+          name: ci-scope
+          path: ci-scope.json
+          retention-days: 7
+  frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - run: npm run test
+      - run: npx playwright install --with-deps chromium webkit
+      - run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: success() && github.event_name == 'push'
+        with:
+          name: frontend-dist
+          path: dist/
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-results
+          path: test-results/
+          retention-days: 7
   server:
+    needs: changes
+    if: needs.changes.outputs.server == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -18,37 +81,56 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd "pg_isready -U postgres -d timeline_server_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
+          --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       TEST_DATABASE_URL: postgresql://postgres:isolated-ci-test-only@127.0.0.1:5432/timeline_server_test
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
         with:
-          node-version-file: .nvmrc
-          cache: npm
-      - run: npm ci
-      - run: npm run server:typecheck
-      - run: npm run server:test
-  checks:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
       - run: npm run lint
-      - run: npm run build
-      - run: npm run test
-      - run: npx playwright install --with-deps chromium webkit
-      - run: npm run test:e2e
-      - uses: actions/upload-artifact@v4
-        if: failure()
+        if: needs.changes.outputs.frontend != 'true'
+      - run: npm run server:typecheck
+      - run: npm run server:test
+  package:
+    needs: changes
+    if: needs.changes.outputs.package == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
         with:
-          name: playwright-results
-          path: test-results/
-          retention-days: 7
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - run: docker build -t timeline:ci .
+      - run: npm run test:package
+        env:
+          TIMELINE_TEST_IMAGE: timeline:ci
+  # Preserve the existing required-check name and fail closed for selected jobs.
+  checks:
+    if: always()
+    needs: [changes, frontend, server, package]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all selected gates
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          FRONTEND_REQUIRED: ${{ needs.changes.outputs.frontend }}
+          SERVER_REQUIRED: ${{ needs.changes.outputs.server }}
+          PACKAGE_REQUIRED: ${{ needs.changes.outputs.package }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+          SERVER_RESULT: ${{ needs.server.result }}
+          PACKAGE_RESULT: ${{ needs.package.result }}
+        run: |
+          test "$CHANGES_RESULT" = success
+          for scope in FRONTEND SERVER PACKAGE; do
+            required="${scope}_REQUIRED"
+            result="${scope}_RESULT"
+            if [ "${!required}" = true ]; then test "${!result}" = success; fi
+          done
