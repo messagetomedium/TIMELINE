@@ -135,7 +135,13 @@ describe("real PostgreSQL command and security boundary", () => {
     expect(response.statusCode, response.body).toBe(200);
     expect((await request("POST", url, ownerCookie, e)).json<unknown>()).toEqual(response.json<unknown>());
     const after = await read(d.project.id);
-    expect(after.tasks[0]).toMatchObject({ isActive: false, startDate: d.tasks[0]?.startDate, endDateExclusive: d.tasks[0]?.endDateExclusive });
+    // SQL task ordering is not a business invariant: assert against stable IDs.
+    const inside = d.tasks.find((t) => t.startDate >= e.command.startDate && t.endDateExclusive <= e.command.endDateExclusive);
+    const outside = d.tasks.find((t) => t.endDateExclusive <= e.command.startDate || t.startDate >= e.command.endDateExclusive);
+    expect(inside).toBeDefined();
+    expect(outside).toBeDefined();
+    expect(after.tasks.find((t) => t.id === inside?.id)).toMatchObject({ isActive: true, startDate: inside?.startDate, endDateExclusive: inside?.endDateExclusive });
+    expect(after.tasks.find((t) => t.id === outside?.id)).toMatchObject({ isActive: false, startDate: outside?.startDate, endDateExclusive: outside?.endDateExclusive });
     expect(after.project.revision).toBe(1);
     expect((await request("POST", url, ownerCookie, { ...e, commandId: randomUUID() })).statusCode).toBe(409);
     expect((await request("POST", url, ownerCookie, { ...e, command: { ...e.command, effect: "deactivate" } })).statusCode).toBe(409);
