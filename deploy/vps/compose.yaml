@@ -1,0 +1,152 @@
+name: ${TIMELINE_PROJECT:-timeline-vps}
+x-logs: &logs
+  driver: json-file
+  options: {max-size: "10m", max-file: "3"}
+x-node: &node
+  image: ${APP_IMAGE:?Run timeline.sh init first}
+  init: true
+  read_only: true
+  tmpfs: ["/tmp:size=64m,mode=1777"]
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  pids_limit: 100
+  logging: *logs
+  entrypoint: [/bin/sh, /app/vps-entrypoint.sh]
+x-db-env: &db-env
+  NODE_ENV: production
+  DB_SSL_MODE: disable
+  DB_CONNECTION_SCOPE: docker-internal
+  NODE_OPTIONS: --max-old-space-size=128
+services:
+  postgres:
+    image: postgres:17-bookworm
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 0.65
+    shm_size: 160m
+    pids_limit: 100
+    security_opt: [no-new-privileges:true]
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256 --auth-local=scram-sha-256
+    command: [postgres, -c, shared_buffers=128MB, -c, work_mem=2MB, -c, maintenance_work_mem=64MB, -c, max_connections=30, -c, max_parallel_workers=0, -c, max_wal_size=256MB, -c, log_statement=none, -c, log_min_error_statement=panic]
+    volumes: ["database:/var/lib/postgresql/data"]
+    secrets:
+      - postgres_password
+      - migrator_password
+      - app_password
+    networks: [database]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U postgres -d postgres"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    logging: *logs
+  app:
+    <<: *node
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 0.70
+    environment:
+      <<: *db-env
+      NODE_OPTIONS: --max-old-space-size=256
+      APP_ORIGIN: https://${DOMAIN:?Run init}
+      APP_STORAGE_MODE: server
+      TRUST_PROXY: 172.30.86.2/32
+      MAILER_MODE: smtp
+      SMTP_HOST: ${SMTP_HOST:?Run init}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:?Run init}
+      MAIL_FROM: ${MAIL_FROM:?Run init}
+    secrets: [DATABASE_URL, BETTER_AUTH_SECRET, SMTP_PASSWORD]
+    command: [node, build/server/main.js]
+    depends_on:
+      postgres: {condition: service_healthy}
+    networks:
+      database: {}
+      ingress: {ipv4_address: 172.30.86.3}
+    stop_grace_period: 15s
+  proxy:
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    mem_limit: 128m
+    cpus: 0.30
+    pids_limit: 100
+    read_only: true
+    tmpfs: ["/tmp:size=16m,mode=1777"]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+    environment:
+      # Local upstream/health traffic must not leave this Docker network via a host proxy.
+      NO_PROXY: app,localhost,127.0.0.1
+      no_proxy: app,localhost,127.0.0.1
+      DOMAIN: ${DOMAIN:?Run init}
+      TLS_EMAIL: ${TLS_EMAIL:?Run init}
+    ports: ["80:80", "443:443"]
+    volumes: ["./Caddyfile:/etc/caddy/Caddyfile:ro", "caddy_data:/data", "caddy_config:/config"]
+    networks:
+      ingress: {ipv4_address: 172.30.86.2}
+    depends_on:
+      app: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, wget, -Y, "off", -q, -O, /dev/null, http://127.0.0.1:8081/health]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    logging: *logs
+  operator:
+    <<: *node
+    profiles: [tools]
+    healthcheck: {disable: true}
+    mem_limit: 256m
+    cpus: 0.50
+    environment: *db-env
+    secrets: [MIGRATION_DATABASE_URL, RESTORE_DATABASE_URL]
+    networks: [database]
+    volumes: ["./state/backups:/backups", "./state/restore:/restore:ro"]
+    command: [node, build/server/cli.js, status]
+  restic:
+    image: restic/restic:0.18.1
+    profiles: [tools]
+    user: "1000:1000"
+    mem_limit: 256m
+    cpus: 0.50
+    pids_limit: 50
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    entrypoint: [/bin/sh, /opt/entrypoint.sh, restic]
+    environment:
+      RESTIC_PASSWORD_FILE: /run/secrets/restic_password
+      RESTIC_CACHE_DIR: /tmp/restic
+      GOMAXPROCS: "1"
+      GOMEMLIMIT: 128MiB
+    secrets: [RESTIC_REPOSITORY, restic_password, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]
+    volumes: ["./entrypoint.sh:/opt/entrypoint.sh:ro", "./state/backups:/backups:ro", "./state/restore:/restore"]
+    networks: [backup]
+    logging: *logs
+networks:
+  database: {internal: true}
+  ingress:
+    ipam:
+      config: [{subnet: 172.30.86.0/28}]
+  backup: {}
+volumes:
+  database: {}
+  caddy_data: {}
+  caddy_config: {}
+secrets:
+  postgres_password: {file: ./state/secrets/postgres_password}
+  migrator_password: {file: ./state/secrets/migrator_password}
+  app_password: {file: ./state/secrets/app_password}
+  DATABASE_URL: {file: ./state/secrets/DATABASE_URL}
+  MIGRATION_DATABASE_URL: {file: ./state/secrets/MIGRATION_DATABASE_URL}
+  RESTORE_DATABASE_URL: {file: ./state/secrets/RESTORE_DATABASE_URL}
+  BETTER_AUTH_SECRET: {file: ./state/secrets/BETTER_AUTH_SECRET}
+  SMTP_PASSWORD: {file: ./state/secrets/SMTP_PASSWORD}
+  RESTIC_REPOSITORY: {file: ./state/secrets/RESTIC_REPOSITORY}
+  restic_password: {file: ./state/secrets/restic_password}
+  AWS_ACCESS_KEY_ID: {file: ./state/secrets/AWS_ACCESS_KEY_ID}
+  AWS_SECRET_ACCESS_KEY: {file: ./state/secrets/AWS_SECRET_ACCESS_KEY}

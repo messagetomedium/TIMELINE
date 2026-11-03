@@ -30,6 +30,7 @@ COPY --chown=node:node --from=build /app/package.json ./package.json
 COPY --chown=node:node --from=build /app/build/server ./build/server
 COPY --chown=node:node --from=build /app/dist ./dist
 COPY --chown=node:node --from=build /app/server/db/migrations ./server/db/migrations
+COPY --chmod=0555 deploy/vps/entrypoint.sh /app/vps-entrypoint.sh
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=8080 STATIC_ROOT=/app/dist
 USER node
 EXPOSE 8080
