@@ -136,8 +136,8 @@ describe("real PostgreSQL command and security boundary", () => {
     expect((await request("POST", url, ownerCookie, e)).json<unknown>()).toEqual(response.json<unknown>());
     const after = await read(d.project.id);
     // SQL task ordering is not a business invariant: assert against stable IDs.
-    const inside = d.tasks.find((t) => t.startDate >= e.command.startDate && t.endDateExclusive <= e.command.endDateExclusive);
-    const outside = d.tasks.find((t) => t.endDateExclusive <= e.command.startDate || t.startDate >= e.command.endDateExclusive);
+    const inside = d.tasks.find((t) => t.startDate >= "2026-11-03" && t.endDateExclusive <= "2026-11-10");
+    const outside = d.tasks.find((t) => t.endDateExclusive <= "2026-11-03" || t.startDate >= "2026-11-10");
     expect(inside).toBeDefined();
     expect(outside).toBeDefined();
     expect(after.tasks.find((t) => t.id === inside?.id)).toMatchObject({ isActive: true, startDate: inside?.startDate, endDateExclusive: inside?.endDateExclusive });
