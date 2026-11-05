@@ -72,6 +72,11 @@ export function TimelineWorkspace({ document, onCommit, initialView, onViewChang
   const body = useRef<HTMLDivElement>(null);
   const timeViewport = useRef<HTMLDivElement>(null);
   const initialized = useRef(false);
+  const initialViewRef = useRef(initialView);
+  const scrollSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (scrollSaveTimer.current !== null) clearTimeout(scrollSaveTimer.current);
+  }, []);
   const today = useLocalToday();
   const initialFocus = today >= document.project.startDate && today < document.project.endDateExclusive ? today : document.project.startDate;
   const [width, setWidth] = useState(960);
@@ -111,15 +116,15 @@ export function TimelineWorkspace({ document, onCommit, initialView, onViewChang
       if (!entry) return;
       setWidth(entry.contentRect.width);
       if (!initialized.current) {
-        if (!initialView) setCamera((previous) => cameraForFocusDate(previous, initialFocus, entry.contentRect.width, 0.32, WORK_ZOOM));
-        if (body.current && initialView) body.current.scrollTop = initialView.cameraY;
+        if (!initialViewRef.current) setCamera((previous) => cameraForFocusDate(previous, initialFocus, entry.contentRect.width, 0.32, WORK_ZOOM));
+        if (body.current && initialViewRef.current) body.current.scrollTop = initialViewRef.current.cameraY;
         initialized.current = true;
         setViewReady(true);
       }
     });
     observer.observe(element);
     return () => { observer.disconnect(); };
-  }, [initialFocus, initialView]);
+  }, [initialFocus]);
 
   const processKeys = document.processes.map(p => p.id).join(',');
   useEffect(() => {
@@ -169,7 +174,15 @@ export function TimelineWorkspace({ document, onCommit, initialView, onViewChang
       <div className="stage-row" style={foundation?{height:foundation.stageHeight(sceneCamera,width,gesture.snapshot)}:undefined}><div className="section-gutter stage-gutter" data-interactive>Этапы</div>
         {foundation ? foundation.stages(sceneCamera, width, gesture.snapshot, gesture.startStage, gesture.startCheckpoint) : <StageBand document={sceneDocument} camera={sceneCamera} width={width} calendar={calendar} weekends={weekends} today={today} onStart={gesture.startStage} onEdit={setEditingStage} />}
       </div>
-      <div className="timeline-body" ref={body} aria-label="Производственный план" onScroll={(event) => { setScrollY(event.currentTarget.scrollTop); }}>
+      <div className="timeline-body" ref={body} aria-label="Производственный план" onScroll={(event) => {
+        // Scrolling is local and synchronous; only persist the final position after it settles.
+        const y = event.currentTarget.scrollTop;
+        if (scrollSaveTimer.current !== null) clearTimeout(scrollSaveTimer.current);
+        scrollSaveTimer.current = setTimeout(() => {
+          scrollSaveTimer.current = null;
+          setScrollY(y);
+        }, 300);
+      }}>
         <div className="timeline-body-layout" style={{ height: bodyHeight }}>
         <div className="section-gutter production-gutter" data-interactive><div><strong>Процессы</strong><small>{document.processes.length} процессов · {document.tasks.length} задачи</small><button className="add-work-button" onClick={() => { if(foundation)foundation.onCreate('process',activeProcess?.id??null);else setCreating('process'); }}>+ Процесс</button>{activeProcess && <button className="add-work-button" onClick={() => { if(foundation)foundation.onCreate('task',activeProcess.id);else setCreating('task'); }}>+ Задача</button>}</div></div>
         <div className="timeline-canvas" style={{ height: bodyHeight }}>
