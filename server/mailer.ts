@@ -11,5 +11,17 @@ export class MemoryMailer implements Mailer {
 export function createMailer(config:Config):Mailer {
   if(config.MAILER_MODE==="memory")return new MemoryMailer();
   const transport=nodemailer.createTransport({host:config.SMTP_HOST,port:config.SMTP_PORT,secure:config.SMTP_PORT===465,requireTLS:config.SMTP_PORT!==465,...(config.SMTP_USER?{auth:{user:config.SMTP_USER,pass:config.SMTP_PASSWORD}}:{})});
-  return { async send(mail) { await transport.sendMail({...mail,from:config.MAIL_FROM}); }, close(){transport.close();} };
+  return { async send(mail) {
+    try { await transport.sendMail({...mail,from:config.MAIL_FROM}); }
+    catch (error) {
+      throw smtpFailure(error);
+    }
+  }, close(){transport.close();} };
+}
+
+function smtpFailure(error: unknown) {
+  const code: unknown = error && typeof error === "object" && "code" in error ? error.code : undefined;
+  const reason = typeof code === "string" && ["ETIMEDOUT","ECONNREFUSED","ENOTFOUND","EAUTH","ESOCKET"].includes(code) ? code : "UNKNOWN";
+  process.stderr.write(`TIMELINE SMTP_FAIL ${reason}; check outbound connectivity and SMTP settings\n`);
+  return Error("SMTP_UNAVAILABLE", { cause: reason });
 }

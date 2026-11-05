@@ -293,10 +293,23 @@ closing the tab. A failed API call never writes to IndexedDB or claims local sav
 
 Existing server API has no safe compensating Undo/Redo or JSON-import command:
 these controls are unavailable in server mode, with an explanation. JSON export
-uses the existing reads. Local import/history remain unchanged. Project view
-preferences use the existing per-user PUT endpoint; workspace/portfolio UI settings
-have no existing API endpoint and last for the current signed-in session. There is
-no automatic migration of local projects, realtime or new infrastructure.
+uses the existing reads and includes the current local view in the existing JSON
+format. Local IndexedDB, import and history remain unchanged. Since V2.0C,
+project view and workspace/portfolio preferences use memory and validated
+**sessionStorage**, scoped to the signed-in user and project in the current tab.
+Scroll/pan/zoom/expansion never call the API, show a saving indicator or wait in
+the content command queue. Unavailable UI storage falls back to memory only;
+unavailable content-draft storage blocks dispatch before the request.
+
+Existing SQL view rows and snapshot fields remain readable for compatibility;
+no migration or deletion is needed. The legacy per-user PUT endpoint still
+validates access and returns `{value}` with a deprecation warning, but no longer
+writes SQL. New projects do not create view rows. A pending view-only request from
+an old tab is adopted locally without HTTP; any accompanying content draft stays
+intact. There is no automatic migration of local projects, realtime or new
+infrastructure. SMTP errors log only a sanitized operational code; accepting a
+mail request does not confirm delivery. Outbound SMTP connectivity remains an
+operator responsibility.
 
 ## Build and local verification
 
@@ -468,17 +481,20 @@ PR обязателен, требуется агрегатор `checks`, обх�
 артефакт проверенного main в GHCR, не подключается к VPS и не запускает миграции.
 При 403 Codex не повторяет API-запрос: PR/merge/CI/Pages завершает ChatGPT.
 
-## V2.0A targeted development checks
+## V2.0A / V2.0C targeted development checks
 
 After `npm ci` and `npm run build`, use a disposable PostgreSQL database whose name
 ends in `_test` (the fixtures clear **only that database**):
 
 ```sh
-npm run test -- src/infrastructure/remote/RemoteCommandService.test.ts
+npm run test -- src/infrastructure/remote/RemoteCommandService.test.ts src/infrastructure/remote/SessionPresentation.test.ts src/infrastructure/remote/ApiClient.test.ts
 TEST_DATABASE_URL=postgresql://TEST_OPERATOR@127.0.0.1/timeline_server_test npm run server:test -- server/tests/frontend-api.test.ts server/tests/runtime.test.ts
 ```
 
-Install Chromium with `npx playwright install chromium`, or set
-`PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to an existing local Chromium. These browser
+Install the test engines with `npx playwright install chromium webkit`, or set
+`PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to an existing local Chromium (WebKit still
+requires its Playwright engine). The server PR gate installs both engines. The
+V2.0C cases measure 60-second scroll/pan, requests, renders and p50/p95 for confirmed
+content actions; local fixture timings are not a production SLA. These browser
 checks use real Fastify/Better Auth/PostgreSQL and record no screenshots or video.
 Full required suites run on the protected PR; Pages deployment keeps local mode.

@@ -5,6 +5,7 @@ import type { RequestApi } from "./ApiClient";
 import { createTemplate } from "../../domain/v2/template";
 import { WORKSPACE_ID } from "../../domain/v2/model";
 import { dateOnly } from "../../domain";
+import { v2BackupSchema } from "../../application/v2/backup";
 
 const document = () => createTemplate("Сервер", "", dateOnly("2026-11-01"), () => crypto.randomUUID(), new Date().toISOString());
 function storage() {
@@ -80,6 +81,65 @@ describe("frontend API command/recovery boundary", () => {
     await expect(service.execute(service.envelope(d, { type: "Rename", kind: "project", id: d.project.id, value: "A" }))).rejects.toThrow("Сначала разрешите");
     expect(requests).toBe(0);
     service.discard(); expect(service.getState().pending).toBe(false);
+  });
+  it("coalesces reads and refreshes only the changed project after a confirmed command", async () => {
+    let d = document(); const calls: string[] = [];
+    const api: RequestApi = (path, method, body) => {
+      calls.push(`${method ?? "GET"} ${path}`);
+      if (method === "POST") { d = { ...d, project: { ...d.project, revision: d.project.revision + 1 } }; return Promise.resolve({ ...result(body, d.project.revision), workspaceRevision: 1 }); }
+      return Promise.resolve(path === "/api/v1/workspaces/current" ? { workspace: { id: WORKSPACE_ID, revision: 1 }, role: "owner" }
+        : path === "/api/v1/people" ? { workspaceId: WORKSPACE_ID, revision: 0, people: [], retiredAssignments: [] }
+        : path.includes("limit=") ? { projects: [{ project: d.project }], workspaceRevision: 1, nextOffset: null } : d);
+    };
+    const service = new RemoteCommandService("one", api, storage());
+    await Promise.all([service.screen(d.project.id), service.screen(d.project.id)]);
+    expect(calls).toHaveLength(4);
+    calls.length = 0;
+    await service.saveView(d.project.id, { ...d.viewPreferences, cameraY: 500 });
+    await service.execute(service.envelope(d, { type: "Rename", kind: "project", id: d.project.id, value: "A" }));
+    const refreshed = await service.screen(d.project.id, true);
+    expect(calls).toEqual([`POST /api/v1/projects/${d.project.id}/commands`, `GET /api/v1/projects/${d.project.id}`]);
+    expect(refreshed.views[d.project.id]?.cameraY).toBe(500);
+    calls.length = 0;
+    await service.projectCommand(d.project.id, { type: "Describe", kind: "project", id: d.project.id, value: "B" }, d.project.revision);
+    await service.screen(d.project.id, true);
+    expect(calls).toEqual([`POST /api/v1/projects/${d.project.id}/commands`, `GET /api/v1/projects/${d.project.id}`]);
+    const backup = v2BackupSchema.parse(JSON.parse(await service.exportBackup()) as unknown);
+    expect(backup.documents[0]?.viewPreferences.cameraY).toBe(500);
+    expect(service.history()).toEqual({ canUndo: false, canRedo: false });
+    await expect(service.undo()).rejects.toThrow("не поддерживается");
+  });
+  it("does not let an older overlapping read erase an acknowledged revision", async () => {
+    let d = document(), unlock: (() => void) | undefined;
+    const gate = new Promise<void>((done) => { unlock = done; }); let first = true;
+    const api: RequestApi = async (path, method, body) => {
+      if (method === "POST") { d = { ...d, project: { ...d.project, revision: 1 } }; return result(body); }
+      if (path === "/api/v1/workspaces/current") return { workspace: { id: WORKSPACE_ID, revision: 1 }, role: "owner" };
+      if (path === "/api/v1/people") return { workspaceId: WORKSPACE_ID, revision: 0, people: [], retiredAssignments: [] };
+      if (path.includes("limit=")) {
+        const snapshot = d;
+        if (first) { first = false; await gate; }
+        return { projects: [{ project: snapshot.project }], workspaceRevision: 1, nextOffset: null };
+      }
+      return d;
+    };
+    const service = new RemoteCommandService("race", api, storage());
+    const reading = service.screen(d.project.id);
+    await service.execute(service.envelope(d, { type: "Rename", kind: "project", id: d.project.id, value: "New" }));
+    unlock?.();
+    const latest = await reading;
+    expect(latest.active?.project.revision).toBe(1); expect(latest.documents[0]?.project.revision).toBe(1);
+  });
+  it("does not turn a confirmed ACK into a failed write when draft cleanup becomes unavailable", async () => {
+    const store = storage(), d = document(); let blocked = false;
+    const service = new RemoteCommandService("cleanup", (_path, _method, body) => { blocked = true; return Promise.resolve(result(body)); }, {
+      ...store, setItem: (key, value) => { if (blocked) throw Error("blocked"); store.setItem(key, value); },
+      removeItem: (key) => { if (blocked) throw Error("blocked"); store.removeItem(key); },
+    });
+    await expect(service.execute(service.envelope(d, { type: "Rename", kind: "project", id: d.project.id, value: "Confirmed" }))).resolves.toBeUndefined();
+    expect(service.getState().pending).toBe(false); expect(service.getState().sending).toBe(false);
+    expect(service.getState().message).toContain("Сервер подтвердил");
+    expect(new RemoteCommandService("cleanup", undefined, store).getState().pending).toBe(true); // Durable old ID remains safely retryable.
   });
   it("loads only lightweight pages, people and the selected detail; exposes no fake undo or import", async () => {
     const d = document(), paths: string[] = [];

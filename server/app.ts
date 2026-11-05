@@ -5,7 +5,6 @@ import { z } from "zod";
 import { WORKSPACE_ID } from "../src/domain/v2/model";
 import { envelopeSchema } from "../src/domain/v2/commands";
 import { normalizeView } from "../src/domain/v2/model";
-import * as t from "./db/schema";
 import { connect } from "./db/connection";
 import { assertMigrations } from "./db/migrate";
 import { PostgresRepository } from "./db/repository";
@@ -136,14 +135,14 @@ export async function createApp(config: Config, suppliedMailer?: Mailer) {
   });
   app.post("/api/v1/people/commands", async (request) => commands.people(await actor(request), peopleEnvelopeSchema.parse(request.body)));
   app.post("/api/v1/workspace/commands", async (request) => commands.workspace(await actor(request), workspaceCommandSchema.parse(request.body)));
-  app.put("/api/v1/projects/:id/view", async (request) => {
+  app.put("/api/v1/projects/:id/view", async (request, reply) => {
     const a = await actor(request), { id } = idParams.parse(request.params), e = viewSchema.parse(request.body);
     if (id !== e.value.projectId) throw new ApiError(400, "PROJECT_SCOPE_MISMATCH");
     return db.transaction(async (tx) => {
       await lockAccess(tx, a, e.workspaceId);
       const doc = requireValue(await new PostgresRepository(tx, e.workspaceId, a.id).load(id));
       const value = normalizeView(doc, e.value);
-      await tx.insert(t.viewPreferences).values({ workspaceId: e.workspaceId, userId: a.id, scope: `project:${id}`, value }).onConflictDoUpdate({ target: [t.viewPreferences.workspaceId, t.viewPreferences.userId, t.viewPreferences.scope], set: { value } });
+      reply.header("Deprecation", "true").header("Warning", '299 TIMELINE "View preferences are session-local; legacy endpoint does not persist"');
       return { value };
     });
   });

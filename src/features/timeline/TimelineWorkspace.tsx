@@ -1,3 +1,4 @@
+import { useViewPersistence } from './useViewPersistence';
 import { effectiveActive } from "../../domain/v2/activity";
 import { DateRange } from "../projects/DateRange";
 import { barGeometry } from '../../domain/barGeometry';
@@ -7,7 +8,7 @@ import { selectWork } from '../../application/v2/workSelection';
 import type { WorkSelection } from '../../application/v2/workSelection';
 import { processIdSchema, taskIdSchema } from '../../domain';
 import { groupDrop } from './groupDrop';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent } from 'react';
 import type { Snapshot } from '../../domain/v2/model';
 import type { PreviewResult } from './useTimelineGesture';
@@ -82,7 +83,7 @@ export function TimelineWorkspace({ document, onCommit, initialView, onViewChang
   const [weekends, setWeekends] = useState(initialView?.showWeekends ?? true);
   const [expanded, setExpanded] = useState<ReadonlySet<ProcessId>>(() => new Set(initialView?.expandedProcessIds ?? document.viewPreferences.expandedProcessIds));
   const [viewReady, setViewReady] = useState(false);
-  const [scrollY, setScrollY] = useState(initialView?.cameraY ?? 0);
+  const [initialOptions] = useState(() => ({ view: initialView, focus: initialFocus }));
   const [retainedView] = useState(() => ({ expandedAssigneeGroupIds: initialView?.expandedAssigneeGroupIds ?? document.viewPreferences.expandedAssigneeGroupIds, showPeoplePanel: initialView?.showPeoplePanel ?? document.viewPreferences.showPeoplePanel }));
   const [creating, setCreating] = useState<'process' | 'task' | null>(null);
   const [selection, setSelection] = useState<Selection | null>(() => document.processes[0] ? { kind: 'process', id: document.processes[0].id } : null);
@@ -95,8 +96,8 @@ export function TimelineWorkspace({ document, onCommit, initialView, onViewChang
   const gesture = useTimelineGesture({ document, camera, step, surface, body, setCamera, onCommit, onError: setError, onStageClick: foundation?.onStageSelect ?? setEditingStage, evaluate: foundation?.evaluate, onCommand: foundation ? (command,revision)=>{if(command.type==='GroupMove'&&command.kind==='task'&&command.destination)setExpanded(old=>new Set([...old,processIdSchema.parse(command.destination?.parentId)]));foundation.onCommand(command,revision);} : undefined,
     stack:foundation?(d,drop)=>groupDrop(foundation.snapshot,d,foundation.layout,expanded,drop):undefined });
   const sceneDocument = gesture.preview ?? document;
-  const sceneExpanded=gesture.command?.type==='GroupMove'&&gesture.command.kind==='task'&&gesture.command.destination?new Set([...expanded,processIdSchema.parse(gesture.command.destination.parentId)]):expanded;
-  const layout = (foundation?.layout ?? layoutTimeline)(sceneDocument, sceneExpanded);
+  const sceneExpanded=useMemo(()=>gesture.command?.type==='GroupMove'&&gesture.command.kind==='task'&&gesture.command.destination?new Set([...expanded,processIdSchema.parse(gesture.command.destination.parentId)]):expanded,[gesture.command,expanded]);
+  const layout = useMemo(() => (foundation?.layout ?? layoutTimeline)(sceneDocument, sceneExpanded), [foundation?.layout, sceneDocument, sceneExpanded]);
   const sceneCamera:TimelineCamera={...camera,gaps:showResults?foundation?.gaps(gesture.snapshot)??[]:[]};
   const bodyHeight = Math.max(460, layout.height,showResults?foundation?.resultsHeight(gesture.snapshot,layout)??0:0);
   const sceneBars:SceneBar[]=layout.rows.flatMap(row=>(row.kind==='process'?sceneDocument.processes:sceneDocument.tasks).filter(w=>w.laneId===row.id).map(w=>({id:w.id,startDate:w.startDate,endDateExclusive:w.endDateExclusive,y:row.y})));
@@ -111,24 +112,26 @@ export function TimelineWorkspace({ document, onCommit, initialView, onViewChang
       if (!entry) return;
       setWidth(entry.contentRect.width);
       if (!initialized.current) {
-        if (!initialView) setCamera((previous) => cameraForFocusDate(previous, initialFocus, entry.contentRect.width, 0.32, WORK_ZOOM));
-        if (body.current && initialView) body.current.scrollTop = initialView.cameraY;
+        if (!initialOptions.view) setCamera((previous) => cameraForFocusDate(previous, initialOptions.focus, entry.contentRect.width, 0.32, WORK_ZOOM));
+        if (body.current && initialOptions.view) body.current.scrollTop = initialOptions.view.cameraY;
         initialized.current = true;
         setViewReady(true);
       }
     });
     observer.observe(element);
     return () => { observer.disconnect(); };
-  }, [initialFocus, initialView]);
+  }, [initialOptions]);
 
   const processKeys = document.processes.map(p => p.id).join(',');
-  useEffect(() => {
+  const persistedView = useMemo(() => {
     const validIds = new Set(processKeys.split(','));
-    if (viewReady && !gesture.active) onViewChange(document.project.id, {
-      projectId: document.project.id, gridStep: step, zoomPxPerDay: camera.pxPerDay, cameraX: camera.panX + daysBetween(camera.originDate, document.project.startDate) * camera.pxPerDay, cameraY: scrollY,
+    return {
+      projectId: document.project.id, gridStep: step, zoomPxPerDay: camera.pxPerDay,
+      cameraX: camera.panX + daysBetween(camera.originDate, document.project.startDate) * camera.pxPerDay,
       showWeekends: weekends, showResults, expandedProcessIds: [...expanded].filter(id => validIds.has(id)), ...retainedView,
-    });
-  }, [viewReady, gesture.active, document.project.id, document.project.startDate, processKeys, step, camera.originDate, camera.panX, camera.pxPerDay, scrollY, weekends, showResults, expanded, retainedView, onViewChange]);
+    };
+  }, [document.project.id, document.project.startDate, processKeys, step, camera.originDate, camera.panX, camera.pxPerDay, weekends, showResults, expanded, retainedView]);
+  const onScroll = useViewPersistence(body, initialOptions.view?.cameraY ?? 0, persistedView, viewReady, !!gesture.active, onViewChange);
 
   const select = (target:Selection,modifiers?:{ctrlKey:boolean;metaKey:boolean;shiftKey:boolean}) => {
     if(foundation){try{const next=selectWork(foundation.snapshot,validMulti?.ids.length?validMulti:null,target.kind,target.id,modifiers?.shiftKey?'range':modifiers?.ctrlKey||modifiers?.metaKey?'toggle':'plain');setMulti(next);const id=next?.ids.includes(target.id)?target.id:next?.ids.at(-1);setSelection(id?(target.kind==='process'?{kind:'process',id:processIdSchema.parse(id)}:{kind:'task',id:taskIdSchema.parse(id)}):null);setError('');}catch(e){setError(e instanceof Error?e.message:'Выбор недоступен');return;}}
@@ -169,7 +172,7 @@ export function TimelineWorkspace({ document, onCommit, initialView, onViewChang
       <div className="stage-row" style={foundation?{height:foundation.stageHeight(sceneCamera,width,gesture.snapshot)}:undefined}><div className="section-gutter stage-gutter" data-interactive>Этапы</div>
         {foundation ? foundation.stages(sceneCamera, width, gesture.snapshot, gesture.startStage, gesture.startCheckpoint) : <StageBand document={sceneDocument} camera={sceneCamera} width={width} calendar={calendar} weekends={weekends} today={today} onStart={gesture.startStage} onEdit={setEditingStage} />}
       </div>
-      <div className="timeline-body" ref={body} aria-label="Производственный план" onScroll={(event) => { setScrollY(event.currentTarget.scrollTop); }}>
+      <div className="timeline-body" ref={body} aria-label="Производственный план" onScroll={onScroll}>
         <div className="timeline-body-layout" style={{ height: bodyHeight }}>
         <div className="section-gutter production-gutter" data-interactive><div><strong>Процессы</strong><small>{document.processes.length} процессов · {document.tasks.length} задачи</small><button className="add-work-button" onClick={() => { if(foundation)foundation.onCreate('process',activeProcess?.id??null);else setCreating('process'); }}>+ Процесс</button>{activeProcess && <button className="add-work-button" onClick={() => { if(foundation)foundation.onCreate('task',activeProcess.id);else setCreating('task'); }}>+ Задача</button>}</div></div>
         <div className="timeline-canvas" style={{ height: bodyHeight }}>

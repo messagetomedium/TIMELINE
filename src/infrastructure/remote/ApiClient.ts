@@ -18,6 +18,7 @@ export type RequestApi = (path: string, method?: string, body?: unknown) => Prom
 /** Cookies stay HttpOnly; no session secrets, actor IDs or configurable foreign hosts. */
 export const requestApi: RequestApi = async (path, method = "GET", body) => {
   if (!path.startsWith("/api/") || path.startsWith("//")) throw Error("Неверный адрес API");
+  if (typeof navigator !== "undefined" && "onLine" in navigator && !navigator.onLine) throw new ApiError(0, "OFFLINE");
   const controller = new AbortController(), timeout = setTimeout(() => { controller.abort(); }, 15_000);
   try {
     const response = await fetch(path, {

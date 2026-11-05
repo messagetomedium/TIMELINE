@@ -1,3 +1,4 @@
+import { viewPreferencesSchema } from "../../src/domain/schema";
 import { and, eq } from "drizzle-orm";
 import type { QueryDatabase } from "./connection";
 import * as t from "./schema";
@@ -50,7 +51,11 @@ export class PostgresRepository implements Pick<V2RepositoryPort,"load"|"summari
     const resultPlacements=await this.db.select().from(t.resultPlacements).where(and(eq(t.resultPlacements.workspaceId,scope.workspaceId),eq(t.resultPlacements.projectId,id))).orderBy(t.resultPlacements.sortIndex,t.resultPlacements.resultId);
     const assignments=await this.db.select().from(t.assignments).where(and(eq(t.assignments.workspaceId,scope.workspaceId),eq(t.assignments.projectId,id))).orderBy(t.assignments.id);
     const [view]=await this.db.select().from(t.viewPreferences).where(and(eq(t.viewPreferences.workspaceId,this.workspaceId),eq(t.viewPreferences.userId,this.actorId),eq(t.viewPreferences.scope,`project:${id}`)));
-    return snapshotSchema.parse({schemaVersion:2,project:this.project(p),stages:stageRows,lanes:[...pl.map((l)=>({...l,kind:"process",processId:null})),...tl.map((l)=>({...l,kind:"task"}))],processes,tasks,results,resultPlacements,checkpoints:checkpoints.map(({anchor,date,...c})=>({...c,timing:anchor==="free"?{anchor,date}:{anchor}})),assignments:assignments.map(({processId,taskId,...a})=>({...a,kind:processId?"process":"task",targetId:processId??taskId})),viewPreferences:view?.value??{projectId:id,gridStep:"1w",zoomPxPerDay:48,cameraX:48,cameraY:0,showWeekends:true,expandedProcessIds:[],expandedAssigneeGroupIds:[],showPeoplePanel:true}});
+    const legacy = viewPreferencesSchema.safeParse(view?.value);
+    const presentation = legacy.success && legacy.data.projectId === id ? {
+      ...legacy.data, expandedProcessIds: legacy.data.expandedProcessIds.filter((key) => processes.some((p) => p.id === key)), expandedAssigneeGroupIds: [],
+    } : {projectId:id,gridStep:"1w",zoomPxPerDay:48,cameraX:48,cameraY:0,showWeekends:true,expandedProcessIds:[],expandedAssigneeGroupIds:[],showPeoplePanel:true};
+    return snapshotSchema.parse({schemaVersion:2,project:this.project(p),stages:stageRows,lanes:[...pl.map((l)=>({...l,kind:"process",processId:null})),...tl.map((l)=>({...l,kind:"task"}))],processes,tasks,results,resultPlacements,checkpoints:checkpoints.map(({anchor,date,...c})=>({...c,timing:anchor==="free"?{anchor,date}:{anchor}})),assignments:assignments.map(({processId,taskId,...a})=>({...a,kind:processId?"process":"task",targetId:processId??taskId})),viewPreferences:presentation});
   }
   async write(d:Snapshot,expected:number|null) {
     const parsed=snapshotSchema.parse(d);
@@ -86,6 +91,6 @@ export class PostgresRepository implements Pick<V2RepositoryPort,"load"|"summari
     if(d.results.length)await this.db.insert(t.results).values(d.results);
     if(d.resultPlacements.length)await this.db.insert(t.resultPlacements).values(d.resultPlacements);
     if(d.assignments.length)await this.db.insert(t.assignments).values(d.assignments.map(({kind,targetId,...a})=>({...a,processId:kind==="process"?targetId:null,taskId:kind==="task"?targetId:null})));
-    if(expected===null)await this.db.insert(t.viewPreferences).values({workspaceId:this.workspaceId,userId:this.actorId,scope:`project:${id}`,value:d.viewPreferences});
+    // Legacy per-user views remain readable. New presentation state never writes SQL.
   }
 }

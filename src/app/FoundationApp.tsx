@@ -54,8 +54,7 @@ export function FoundationApp({ service, server }: { service: UIService; server?
     [error, setError] = useState(""),
     [historyIssues, setHistoryIssues] = useState<string[]>([]),
     [legacy, setLegacy] = useState(false),
-    [busy, setBusy] = useState(false),
-    [pending, setPending] = useState(0);
+    [busy, setBusy] = useState(false);
   const [detail, setActive] = useState<Snapshot | null>(null),
     [loadedId, setLoadedId] = useState<string | null>(null),
     [portfolio, setPortfolio] = useState(emptyPortfolio);
@@ -64,13 +63,12 @@ export function FoundationApp({ service, server }: { service: UIService; server?
   const draftKeys = useRef(new WeakMap<HTMLElement, string>());
   const writing = useRef(0),
     operations = useRef(Promise.resolve()),
-    queue = useRef(Promise.resolve()),
     reading = useRef(0);
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (afterCommand = false) => {
     const token = ++reading.current;
     const requestedId = selectedId() ?? null;
     let s: Awaited<ReturnType<UIService["screen"]>>;
-    try { s = await service.screen(requestedId); }
+    try { s = await service.screen(requestedId, afterCommand); }
     catch (e) { if (token === reading.current) setReadFailed(true); throw e; }
     if (token === reading.current) setReadFailed(false);
     if (token !== reading.current) return;
@@ -89,7 +87,7 @@ export function FoundationApp({ service, server }: { service: UIService; server?
     );
   };
   useEffect(() => {
-    void Promise.resolve().then(refresh).catch(report);
+    void Promise.resolve().then(() => refresh()).catch(report);
     if (!recovery) void hasLegacyData().then(setLegacy).catch(report);
     const listener = () => {
       setId(selectedId());
@@ -107,9 +105,14 @@ export function FoundationApp({ service, server }: { service: UIService; server?
       const result = operations.current.then(async () => {
         setError("");
         try {
-          await queue.current;
           await operation();
-          await refresh();
+          if (recovery) {
+            try { await refresh(true); }
+            catch (e) {
+              report(new Error(`Изменение подтверждено сервером, но обновить экран не удалось. ${e instanceof Error ? e.message : "Повторите загрузку."}`));
+              return true; // A failed read must not invite a second create/command.
+            }
+          } else await refresh(true);
           return true;
         } catch (e) {
           report(e);
@@ -174,28 +177,13 @@ export function FoundationApp({ service, server }: { service: UIService; server?
       ? `${active.project.name} — Таймлайн`
       : "Проекты — Таймлайн";
   }, [active]);
-  const saveView = useCallback(
-    (projectId: ProjectId, v: ViewPreferences) => {
-      setViews((old) => ({ ...old, [projectId]: v }));
-      setPending((n) => n + 1);
-      queue.current = queue.current
-        .then(() => service.saveView(projectId, v))
-        .catch(report)
-        .finally(() => {
-          setPending((n) => n - 1);
-        });
-    },
-    [service],
-  );
-  const savePreferences = (p: WorkspacePreferences) => {
-    setPreferences(p);
-    setPending((n) => n + 1);
-    queue.current = queue.current
-      .then(() => service.savePreferences(p))
-      .catch(report)
-      .finally(() => {
-        setPending((n) => n - 1);
-      });
+  const saveView = useCallback((projectId: ProjectId, view: ViewPreferences) => {
+    // The timeline owns live presentation state. No root rerender, saving status or content queue.
+    void service.saveView(projectId, view).catch(report);
+  }, [service]);
+  const savePreferences = (value: WorkspacePreferences) => {
+    setPreferences(value);
+    void service.savePreferences(value).catch(report);
   };
   useEffect(() => {
     if (!recovery) return;
@@ -227,6 +215,7 @@ export function FoundationApp({ service, server }: { service: UIService; server?
     <div className="app-shell" onInputCapture={(event) => {
       if (!recovery || !(event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)) return;
       const input = event.target;
+      if (input.closest("[data-presentation]") || input.getAttribute("role") === "combobox" || input.type === "search") return;
       if (input.readOnly || ["password", "checkbox", "radio", "button", "submit", "file"].includes(input.type)) return;
       const label = input.getAttribute("aria-label") ?? input.closest("label")?.textContent ?? input.name;
       const fields = Array.from(event.currentTarget.querySelectorAll("input,textarea"));
@@ -266,7 +255,7 @@ export function FoundationApp({ service, server }: { service: UIService; server?
           role="status"
           aria-label="Состояние хранения"
         >
-          {busy || pending
+          {busy
             ? "Сохраняется…"
             : recoveryState.pending ? "Запись не подтверждена"
             : readFailed ? "Нет связи с хранилищем"

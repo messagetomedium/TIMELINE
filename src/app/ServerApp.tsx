@@ -26,7 +26,7 @@ export function ServerApp({ resetToken, verified }: { resetToken?: string; verif
     catch { setError("Не удалось выйти. Повторите подключение."); }
   };
   return <>
-    {service && user ? <FoundationApp service={service} server={{ recovery: service, email: user.email, onLogout: logout, onLogin: () => { setLoginOpen(true); } }} /> : null}
+    {service && user ? <FoundationApp key={user.id} service={service} server={{ recovery: service, email: user.email, onLogout: logout, onLogin: () => { setLoginOpen(true); } }} /> : null}
     {(!service || loginOpen || resetOpen) && <AuthForm initial={resetOpen ? "reset" : "login"} resetToken={resetToken ?? ""} verified={verified} onSuccess={authenticated} onResetDone={() => { setResetOpen(false); }} />}
   </>;
 }
@@ -47,11 +47,11 @@ function AuthForm({ initial, resetToken, verified, onSuccess, onResetDone }: {
         await onSuccess();
       } else if (mode === "register") {
         await requestApi("/api/auth/sign-up/email", "POST", { name: formText(data, "name").trim(), email, password, callbackURL });
-        setNotice("Письмо подтверждения отправлено. Откройте ссылку из письма, затем войдите. Доступ к пространству предоставляет администратор.");
+        setNotice("Запрос подтверждения принят. Проверьте почту и откройте ссылку, затем войдите. Доставка письма не подтверждена. Доступ к пространству предоставляет администратор.");
         setMode("login");
       } else if (mode === "forgot") {
         await requestApi("/api/auth/request-password-reset", "POST", { email, redirectTo: `${location.origin}/?auth=reset` });
-        setNotice("Если аккаунт существует, письмо со ссылкой восстановления отправлено.");
+        setNotice("Если аккаунт существует, запрос восстановления принят. Проверьте почту; доставка письма не подтверждена.");
       } else {
         await requestApi("/api/auth/reset-password", "POST", { token: resetToken, newPassword: password });
         setNotice("Пароль обновлён. Войдите с новым паролем."); setMode("login"); onResetDone();
@@ -59,7 +59,7 @@ function AuthForm({ initial, resetToken, verified, onSuccess, onResetDone }: {
     } catch {
       setError(mode === "login" ? "Вход не выполнен. Проверьте email, пароль и подтверждение email. Если сервер недоступен, повторите позже."
         : mode === "reset" ? "Пароль не изменён. Ссылка могла истечь; запросите новую или повторите позже."
-        : "Запрос не выполнен. Проверьте поля и соединение с сервером.");
+        : "Не удалось подтвердить отправку. Проверьте поля; сервис почты может быть временно недоступен. Повторите позже или сообщите администратору.");
     } finally { setBusy(false); }
   };
   return <section className="modal-backdrop"><form className="workspace-dialog" aria-label="Доступ к TIMELINE" onSubmit={(e) => {
@@ -79,7 +79,7 @@ function AuthForm({ initial, resetToken, verified, onSuccess, onResetDone }: {
     {mode === "login" && <button type="button" disabled={busy || !z.email().safeParse(email).success} onClick={() => {
       setBusy(true); setError("");
       void requestApi("/api/auth/send-verification-email", "POST", { email, callbackURL: `${location.origin}/?auth=verified` })
-        .then(() => { setNotice("Если требуется подтверждение, письмо отправлено."); }).catch(() => { setError("Письмо не отправлено. Повторите позже."); }).finally(() => { setBusy(false); });
+        .then(() => { setNotice("Если требуется подтверждение, запрос принят. Проверьте почту; доставка письма не подтверждена."); }).catch(() => { setError("Не удалось подтвердить отправку. Сервис почты может быть недоступен; повторите позже или сообщите администратору."); }).finally(() => { setBusy(false); });
     }}>Повторить письмо подтверждения</button>}
   </form></section>;
 }
