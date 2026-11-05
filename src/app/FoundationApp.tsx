@@ -174,16 +174,35 @@ export function FoundationApp({ service, server }: { service: UIService; server?
       ? `${active.project.name} — Таймлайн`
       : "Проекты — Таймлайн";
   }, [active]);
+  const latestViews = useRef(new Map<ProjectId, ViewPreferences>());
+  const viewSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveView = useCallback(
     (projectId: ProjectId, v: ViewPreferences) => {
-      setViews((old) => ({ ...old, [projectId]: v }));
-      setPending((n) => n + 1);
-      queue.current = queue.current
-        .then(() => service.saveView(projectId, v))
-        .catch(report)
-        .finally(() => {
-          setPending((n) => n - 1);
-        });
+      // View preferences are not content edits: only send the latest view after idle.
+      setViews((old) => JSON.stringify(old[projectId]) === JSON.stringify(v) ? old : { ...old, [projectId]: v });
+      latestViews.current.set(projectId, v);
+      if (viewSaveTimer.current !== null) clearTimeout(viewSaveTimer.current);
+      const flush = () => {
+        // Never contend with a content write or block it behind a stream of scroll updates.
+        if (writing.current > 0) {
+          viewSaveTimer.current = setTimeout(flush, 250);
+          return;
+        }
+        viewSaveTimer.current = null;
+        const batch = [...latestViews.current];
+        latestViews.current.clear();
+        if (!batch.length) return;
+        setPending((n) => n + 1);
+        queue.current = queue.current
+          .then(async () => {
+            for (const [id, value] of batch) await service.saveView(id, value);
+          })
+          .catch(report)
+          .finally(() => {
+            setPending((n) => n - 1);
+          });
+      };
+      viewSaveTimer.current = setTimeout(flush, 400);
     },
     [service],
   );
