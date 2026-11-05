@@ -74,8 +74,11 @@ export function TimelineWorkspace({ document, onCommit, initialView, onViewChang
   const initialized = useRef(false);
   const initialViewRef = useRef(initialView);
   const scrollSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => {
-    if (scrollSaveTimer.current !== null) clearTimeout(scrollSaveTimer.current);
+  useEffect(() => {
+    const timer = scrollSaveTimer;
+    return () => {
+      if (timer.current !== null) clearTimeout(timer.current);
+    };
   }, []);
   const today = useLocalToday();
   const initialFocus = today >= document.project.startDate && today < document.project.endDateExclusive ? today : document.project.startDate;
