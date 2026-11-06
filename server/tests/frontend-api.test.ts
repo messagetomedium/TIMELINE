@@ -43,6 +43,7 @@ async function registerOwner() {
   await login();
   await browserExpect(page.getByRole("heading", { name: "Проекты", exact: true })).toBeVisible();
   await saved();
+  await browserExpect(page.getByRole("status", { name: "Синхронизация", exact: true })).toHaveText("Обновления подключены");
 }
 async function createProject() {
   await page.getByRole("button", { name: "+ Новый проект", exact: true }).click();
@@ -62,6 +63,35 @@ async function read(id: string) {
 async function nameField() {
   await page.getByRole("button", { name: "Этап: Этап 1", exact: true }).click();
   return page.getByLabel("Название", { exact: true });
+}
+async function addedEditor(target: BrowserContext) {
+  const name = "realtime-editor@example.test";
+  expect((await target.request.post(`${origin}/api/auth/sign-up/email`, { headers: { origin }, data: { name: "Realtime editor", email: name, password } })).status()).toBe(200);
+  const verify = mailer.messages.findLast((m) => m.to === name && m.subject.includes("подтверждение"))?.text; if (!verify) throw Error("Missing fixture verification");
+  expect((await target.request.get(verify)).ok()).toBe(true);
+  expect((await page.request.post(`${origin}/api/v1/invitations`, { headers: { origin }, data: { email: name } })).status()).toBe(200);
+  const invite = mailer.messages.findLast((m) => m.to === name && m.subject.includes("приглашение"))?.text; if (!invite) throw Error("Missing fixture invitation");
+  expect((await target.request.post(`${origin}/api/auth/sign-in/email`, { headers: { origin }, data: { email: name, password } })).status()).toBe(200);
+  expect((await target.request.post(`${origin}/api/v1/invitations/accept`, { headers: { origin }, data: { token: new URL(invite).hash.slice(1) } })).status()).toBe(200);
+  const row = (await admin.query<{ id: string }>("select id from auth_users where email=$1", [name])).rows[0]; if (!row) throw Error("Missing fixture editor"); return row.id;
+}
+function taskBar(target: Page, id: string) { return target.locator(`.task-bar[data-entity-id="${id}"]`); }
+async function selectTask(target: Page, id: string) { const bar = taskBar(target, id); await bar.focus(); await bar.press("Enter"); }
+async function renameTask(target: Page, id: string, value: string) {
+  await selectTask(target, id); const field = target.getByLabel("Название", { exact: true }); await field.fill(value); await field.press("Enter");
+  await browserExpect(target.getByRole("status", { name: "Состояние хранения" })).toHaveText("Сохранено на сервере");
+}
+async function personalView(target: Page) {
+  return target.evaluate(() => {
+    const editor = document.querySelector('main[aria-label="Редактор таймлайна"]'), body = document.querySelector('.timeline-body');
+    return { zoom: editor?.getAttribute("data-px-per-day"), pan: editor?.getAttribute("data-pan-x"), y: body?.scrollTop,
+      step: document.querySelector<HTMLSelectElement>('#grid-step')?.value, weekends: document.querySelector('.weekend-button')?.getAttribute("aria-pressed"),
+      results: [...document.querySelectorAll('.floating-toolbar button')].find((button) => button.textContent === "Результаты")?.getAttribute("aria-pressed"),
+      collapsed: editor?.classList.contains("inspector-collapsed"),
+      peopleOpen: !!document.querySelector('.people-catalog'),
+      expanded: [...document.querySelectorAll('.process-bar')].map((bar) => `${bar.getAttribute("data-entity-id") ?? ""}:${bar.querySelector('.expand-handle')?.getAttribute("aria-expanded") ?? ""}`).sort(),
+      selected: document.querySelector('.timeline-bar.selected')?.getAttribute("data-entity-id") ?? null };
+  });
 }
 
 async function renderProbe(targetContext: BrowserContext) {
@@ -119,6 +149,106 @@ describe("V2.0A browser with real PostgreSQL", () => {
     { await admin.query(`drop owned by ${escapeIdentifier(role)}`); await admin.query(`drop role ${escapeIdentifier(role)}`); await admin.end(); }
   });
   for (const engine of ["chromium", "webkit"] as const) {
+    it(`V2.1B ${engine}: personal views survive bidirectional realtime, local gestures and F5 in two user contexts`, async () => {
+      const extra = engine === "webkit" ? await webkit.launch({ headless: true }) : null, engineBrowser = extra ?? browser;
+      if (extra) { await context.close(); context = await extra.newContext({ viewport: { width: 1440, height: 640 } }); page = await context.newPage(); }
+      await page.setViewportSize({ width: 1440, height: 640 });
+      const second = await engineBrowser.newContext({ viewport: { width: 1440, height: 640 } }), bob = await second.newPage();
+      try {
+        await registerOwner(); const id = await createProject(), d = await read(id), bobId = await addedEditor(second);
+        const ownerId = (await admin.query<{ id: string }>("select id from auth_users where email=$1", [email])).rows[0]?.id; if (!ownerId) throw Error("Missing owner");
+        for (const [target, userId, zoom] of [[context, ownerId, 28], [second, bobId, 10.5]] as const) await target.addInitScript(({ userId, view }) => {
+          const key = `timeline-ui-v1:${encodeURIComponent(userId)}:${view.projectId}`;
+          if (!sessionStorage.getItem(key)) sessionStorage.setItem(key, JSON.stringify({ version: 1, view }));
+        }, { userId, view: { ...d.viewPreferences, zoomPxPerDay: zoom, showResults: zoom !== 28, expandedProcessIds: d.processes.map((p) => p.id), cameraX: 48, cameraY: 0 } });
+        // Remove the old owner's default view only in this test tab, then load both authoritative snapshots.
+        await page.evaluate((key) => { sessionStorage.removeItem(key); }, `timeline-ui-v1:${ownerId}:${id}`);
+        await page.reload(); await bob.goto(`${origin}/#/projects/${id}`);
+        for (const target of [page, bob]) await browserExpect(target.getByRole("status", { name: "Синхронизация", exact: true })).toHaveText("Обновления подключены");
+        const first = d.processes.find((p) => p.title === "Процесс 1"), aProcess = d.processes.find((p) => p.title === "Процесс 2"), bProcess = d.processes.find((p) => p.title === "Процесс 3");
+        const aTask = d.tasks.find((t) => t.processId === aProcess?.id), bTask = d.tasks.find((t) => t.processId === bProcess?.id), selected = d.tasks.find((t) => t.processId === first?.id);
+        if (!aTask || !bTask || !first || !selected) throw Error("Missing view fixture");
+        const counts = async () => (await admin.query<{ receipts: number; audits: number; events: number; leases: number; sequence: string; fence: string }>("select (select count(*)::int from command_receipts) receipts,(select count(*)::int from audit_events) audits,(select count(*)::int from workspace_events) events,(select count(*)::int from edit_leases) leases,(select sequence::text from collaboration_state) sequence,(select fence::text from collaboration_state) fence")).rows[0];
+        const before = await counts(), requestsA: string[] = [], requestsB: string[] = [];
+        page.on("request", (r) => { if (r.url().includes("/api/v1/")) requestsA.push(`${r.method()} ${r.url()}`); });
+        bob.on("request", (r) => { if (r.url().includes("/api/v1/")) requestsB.push(`${r.method()} ${r.url()}`); });
+        for (const target of [page, bob]) {
+          await target.getByRole("button", { name: "Увеличить масштаб", exact: true }).click();
+          await target.getByRole("button", { name: "Уменьшить масштаб", exact: true }).click();
+        }
+        await page.getByLabel("Шаг", { exact: true }).selectOption("1d"); await bob.getByLabel("Шаг", { exact: true }).selectOption("1w");
+        await page.getByRole("button", { name: "Выходные", exact: true }).click();
+        await page.getByRole("button", { name: "Свернуть: Процесс 1", exact: true }).click();
+        await page.getByRole("button", { name: "Свернуть свойства", exact: true }).click();
+        await selectTask(bob, selected.id);
+        for (const target of [page, bob]) {
+          const body = target.getByLabel("Производственный план", { exact: true }); await body.evaluate((el) => { el.scrollTop = 60; });
+          const bounds = await body.boundingBox(); if (!bounds) throw Error("Missing viewport");
+          await target.mouse.move(bounds.x + bounds.width - 35, bounds.y + bounds.height / 2); await target.mouse.down({ button: "middle" }); await target.mouse.move(bounds.x + bounds.width - 15, bounds.y + bounds.height / 2); await target.mouse.up({ button: "middle" });
+        }
+        await bob.getByRole("button", { name: "Исполнители", exact: true }).click();
+        const people = bob.getByRole("dialog", { name: "Исполнители пространства", exact: true }); await browserExpect(people).toBeVisible();
+        await page.waitForTimeout(250);
+        expect(requestsA).toEqual([]); expect(requestsB).toEqual([]); expect(await counts()).toEqual(before);
+        await browserExpect(page.getByLabel("Масштаб", { exact: true })).toHaveText("200%"); await browserExpect(bob.getByLabel("Масштаб", { exact: true })).toHaveText("75%");
+        const bobView = await personalView(bob); expect(bobView.weekends).toBe("true"); expect(bobView.collapsed).toBe(false);
+        await page.getByRole("button", { name: "Развернуть свойства", exact: true }).click();
+        await renameTask(page, aTask.id, "Задача от A");
+        await page.getByRole("button", { name: "Свернуть свойства", exact: true }).click();
+        await browserExpect(taskBar(bob, aTask.id)).toContainText("Задача от A"); expect(await personalView(bob)).toEqual(bobView);
+        expect(requestsA.filter((r) => r.startsWith("GET "))).toHaveLength(1); expect(requestsA.filter((r) => r.startsWith("POST "))).toHaveLength(2);
+        const person = await page.request.post(`${origin}/api/v1/people/commands`, { headers: { origin }, data: { commandId: randomUUID(), workspaceId: d.project.workspaceId, expectedRevision: 0,
+          command: { type: "CreatePerson", id: randomUUID(), fields: { firstName: "RealtimePersonFixture", lastName: "", defaultRole: "", contacts: "private-fixture", note: "" } } } });
+        expect(person.status()).toBe(200); await browserExpect(people.getByText("RealtimePersonFixture", { exact: true })).toBeVisible(); expect(await personalView(bob)).toEqual(bobView);
+        // Calendar drag is content; only its resulting dates propagate, never the camera.
+        const moved = taskBar(page, aTask.id), handle = await moved.locator('.move-handle').boundingBox(); if (!handle) throw Error("Missing task handle");
+        await page.mouse.move(handle.x + handle.width / 2, handle.y + 8); await page.mouse.down(); await page.mouse.move(handle.x + handle.width / 2 + 29, handle.y + 8, { steps: 6 }); await page.mouse.up(); await saved();
+        const changedDate = await moved.getAttribute("data-start"); expect(changedDate).not.toBe(aTask.startDate);
+        await browserExpect(taskBar(bob, aTask.id)).toHaveAttribute("data-start", changedDate ?? ""); expect(await personalView(bob)).toEqual(bobView);
+        const aliceView = await personalView(page); expect(aliceView.weekends).toBe("false"); expect(aliceView.collapsed).toBe(true);
+        await people.getByRole("button", { name: "Закрыть", exact: true }).click();
+        await renameTask(bob, bTask.id, "Задача от B"); await browserExpect(taskBar(page, bTask.id)).toContainText("Задача от B"); expect(await personalView(page)).toEqual(aliceView);
+        const finalBob = await personalView(bob);
+        await page.reload(); await bob.reload();
+        for (const target of [page, bob]) await browserExpect(target.getByRole("status", { name: "Синхронизация", exact: true })).toHaveText("Обновления подключены");
+        expect({ ...await personalView(page), selected: null }).toEqual({ ...aliceView, selected: null });
+        expect({ ...await personalView(bob), selected: null }).toEqual({ ...finalBob, selected: null });
+        expect((await read(id)).project.revision).toBe(3);
+      } finally { await second.close(); if (extra) await extra.close(); }
+    }, 90_000);
+    it(`V2.1B ${engine}: independent edits, retained same-task draft and offline retry reconnect without F5`, async () => {
+      const extra = engine === "webkit" ? await webkit.launch({ headless: true }) : null, engineBrowser = extra ?? browser;
+      if (extra) { await context.close(); context = await extra.newContext({ viewport: { width: 1440, height: 900 } }); page = await context.newPage(); }
+      const second = await engineBrowser.newContext({ viewport: { width: 1440, height: 900 } }), bob = await second.newPage();
+      try {
+        await registerOwner(); const id = await createProject(), d = await read(id), bobId = await addedEditor(second); await page.reload(); await bob.goto(`${origin}/#/projects/${id}`);
+        for (const target of [page, bob]) {
+          await browserExpect(target.getByRole("status", { name: "Синхронизация", exact: true })).toHaveText("Обновления подключены");
+          for (const toggle of await target.locator('.process-bar .expand-handle').all()) await toggle.click();
+        }
+        const a = d.tasks[0], b = d.tasks.find((t) => t.processId !== a?.processId); if (!a || !b) throw Error("Missing independent tasks");
+        await Promise.all([renameTask(page, a.id, "Параллельно A"), renameTask(bob, b.id, "Параллельно B")]);
+        await browserExpect(taskBar(page, b.id)).toContainText("Параллельно B"); await browserExpect(taskBar(bob, a.id)).toContainText("Параллельно A");
+        await selectTask(bob, a.id); const draft = bob.getByLabel("Название", { exact: true }); await draft.fill("Черновик B");
+        await renameTask(page, a.id, "Конкурирующая A");
+        await browserExpect(bob.getByRole("status", { name: "Синхронизация", exact: true })).toContainText("ожидают завершения"); await browserExpect(draft).toHaveValue("Черновик B");
+        await draft.press("Enter"); await browserExpect(bob.getByRole("button", { name: "Сверить конфликт", exact: true })).toBeVisible();
+        expect(await bob.evaluate(() => JSON.stringify(sessionStorage))).toContain("Черновик B");
+        await bob.getByRole("button", { name: "Загрузить с сервера", exact: true }).click(); await bob.getByRole("button", { name: "Сверить конфликт", exact: true }).click();
+        await bob.getByRole("button", { name: "Подтвердить повтор к новой ревизии", exact: true }).click();
+        await browserExpect(bob.getByRole("status", { name: "Состояние хранения" })).toHaveText("Сохранено на сервере"); await browserExpect(taskBar(page, a.id)).toContainText("Черновик B");
+        await second.setOffline(true); await selectTask(bob, a.id); await draft.fill("После reconnect B"); await draft.press("Enter");
+        await browserExpect(bob.getByRole("button", { name: "Повторить исходный запрос", exact: true })).toBeVisible();
+        const stored = await bob.evaluate((userId) => sessionStorage.getItem(`timeline-api-draft-v1:${userId}`) ?? "", bobId);
+        const original = JSON.parse(stored) as { pending: { body: { commandId: string } } };
+        await renameTask(page, b.id, "Во время offline A"); await second.setOffline(false);
+        const sent: string[] = []; bob.on("request", (r) => { if (r.method() === "POST" && r.url().endsWith(`/projects/${id}/commands`)) sent.push(r.postData() ?? ""); });
+        await bob.getByRole("button", { name: "Повторить исходный запрос", exact: true }).click();
+        await browserExpect(bob.getByRole("status", { name: "Состояние хранения" })).toHaveText("Сохранено на сервере"); await browserExpect(taskBar(page, a.id)).toContainText("После reconnect B");
+        expect(sent.map((value) => JSON.parse(value) as unknown)).toEqual([original.pending.body]);
+        expect((await admin.query("select command_id from command_receipts where command_id=$1", [original.pending.body.commandId])).rowCount).toBe(1);
+      } finally { await second.close(); if (extra) await extra.close(); }
+    }, 90_000);
     it(`V2.1A ${engine}: invitation registration, verification, two admins, conflict and membership revocation`, async () => {
       const extra = engine === "webkit" ? await webkit.launch({ headless: true }) : null;
       const engineBrowser = extra ?? browser;
@@ -166,9 +296,10 @@ describe("V2.0A browser with real PostgreSQL", () => {
         await invited.getByRole("button", { name: "Закрыть доступ", exact: true }).click();
         await page.getByRole("button", { name: "Закрыть доступ", exact: true }).click();
         await page.reload(); await saved();
-        const ownerField = await nameField(); await ownerField.fill("От владельца"); await ownerField.press("Enter"); await saved();
         await invited.getByRole("button", { name: "Этап: Этап 1", exact: true }).click();
-        const field = invited.getByLabel("Название", { exact: true }); await field.fill("От администратора"); await field.press("Enter");
+        const field = invited.getByLabel("Название", { exact: true }); await field.fill("От администратора");
+        const ownerField = await nameField(); await ownerField.fill("От владельца"); await ownerField.press("Enter"); await saved();
+        await field.press("Enter");
         await browserExpect(invited.getByRole("button", { name: "Сверить конфликт", exact: true })).toBeVisible();
         expect(await invited.evaluate(() => JSON.stringify(sessionStorage))).toContain("От администратора");
         await invited.getByRole("button", { name: "Загрузить с сервера", exact: true }).click();
@@ -370,8 +501,8 @@ describe("V2.0A browser with real PostgreSQL", () => {
             return { commits: probe.commits, appRenders: probe.appRenders };
           }));
           (requestCounts[kind] ??= []).push(writes.length + reads.length);
-          expect(writes, `${kind}: one content request`).toHaveLength(1); expect(reads, `${kind}: one project refresh`).toHaveLength(1);
-          expect(writes[0]?.url).toContain("/commands"); expect(reads[0]).toContain(`/projects/${id}`);
+          expect(writes, `${kind}: one lease preparation and one content request`).toHaveLength(2); expect(reads, `${kind}: one project refresh`).toHaveLength(1);
+          expect(writes[0]?.url).toContain("/leases"); expect(writes[1]?.url).toContain("/commands"); expect(reads[0]).toContain(`/projects/${id}`);
         };
         await page.getByRole("button", { name: "Этап: Этап 1", exact: true }).click();
         for (let n = 0; n < 5; n++) {
@@ -474,12 +605,13 @@ describe("V2.0A browser with real PostgreSQL", () => {
     await browserExpect(other.getByRole("status", { name: "Состояние хранения" })).toHaveText("Сохранено на сервере");
     await other.getByLabel("Шаг", { exact: true }).selectOption("1mo");
     await browserExpect(page.getByLabel("Шаг", { exact: true })).toHaveValue("1w");
+    field = page.getByLabel("Название", { exact: true }); await field.fill("После конфликта");
     await other.getByRole("button", { name: "Проект", exact: true }).click();
     await other.getByLabel("Описание", { exact: true }).fill("Из другого устройства");
     await other.getByLabel("Описание", { exact: true }).press("Enter");
     await browserExpect(other.getByRole("status", { name: "Состояние хранения" })).toHaveText("Сохранено на сервере");
     await other.close();
-    field = page.getByLabel("Название", { exact: true }); await field.fill("После конфликта"); await field.press("Tab");
+    await field.press("Tab");
     await browserExpect(page.getByRole("button", { name: "Сверить конфликт" })).toBeVisible();
     await page.getByRole("button", { name: "Загрузить с сервера" }).click();
     await page.getByRole("button", { name: "Сверить конфликт" }).click();
@@ -503,8 +635,12 @@ describe("V2.0A browser with real PostgreSQL", () => {
     await admin.query("insert into auth_accounts(id,user_id,account_id,provider_id,password) select $1,$2,$2,provider_id,password from auth_accounts where user_id=$3 and provider_id='credential'", [randomUUID(), bobId, owner.rows[0]?.id]);
     await admin.query("insert into workspace_memberships(workspace_id,user_id,role) select id,$1,'admin' from workspaces", [bobId]);
     await page.request.post(`${origin}/api/auth/sign-out`, { headers: { origin }, data: {} });
-    const sent: string[] = [];
-    page.on("request", (r) => { if (r.method() === "POST" && r.url().endsWith(`/projects/${id}/commands`)) sent.push(r.postData() ?? ""); });
+    const sent: string[] = [], prepared: string[] = [];
+    page.on("request", (r) => {
+      if (r.method() !== "POST") return;
+      if (r.url().endsWith(`/projects/${id}/commands`)) sent.push(r.postData() ?? "");
+      if (r.url().endsWith(`/projects/${id}/leases`)) prepared.push(r.postData() ?? "");
+    });
     const field = await nameField(); await field.fill("Черновик Alice"); await field.press("Enter");
     await browserExpect(page.getByRole("button", { name: "Войти снова", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Войти снова", exact: true }).click();
@@ -519,7 +655,7 @@ describe("V2.0A browser with real PostgreSQL", () => {
     await browserExpect(page.getByRole("button", { name: "Повторить исходный запрос", exact: true })).toBeVisible();
     expect(await page.getByRole("main", { name: "Редактор таймлайна" }).getAttribute("data-px-per-day")).toBe(zoom);
     await page.getByRole("button", { name: "Повторить исходный запрос", exact: true }).click(); await saved();
-    expect(sent).toHaveLength(2); expect(sent[0]).toBe(sent[1]); expect((await read(id)).project.revision).toBe(1);
+    expect(prepared).toHaveLength(2); expect(prepared[0]).toBe(prepared[1]); expect(sent).toEqual([prepared[0]]); expect((await read(id)).project.revision).toBe(1);
   }, 60_000);
   it("V2.0C chromium: a confirmed creation is not repeated when its follow-up read fails", async () => {
     await registerOwner(); let creates = 0;

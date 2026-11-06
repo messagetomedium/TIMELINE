@@ -21,6 +21,9 @@ import { ApiError, requireValue } from "./errors";
 import { boundedInput, createProjectSchema, idParams, inviteSchema, peopleEnvelopeSchema, tokenSchema, viewSchema, workspaceCommandSchema } from "./dto";
 import type { FastifyRequest } from "fastify";
 import { registerFrontend } from "./frontend";
+import { Leases } from "./leases";
+import { registerRealtime } from "./realtime";
+import { leaseActionSchema, leaseProofSchema } from "../src/application/v2/collaborationContracts";
 
 const querySchema = z.strictObject({ workspaceId: z.uuid().default(WORKSPACE_ID) });
 const listSchema = querySchema.extend({ limit: z.coerce.number().int().min(1).max(100).default(40), offset: z.coerce.number().int().min(0).max(1_000_000).default(0) });
@@ -80,8 +83,9 @@ export async function createApp(config: Config, suppliedMailer?: Mailer) {
   async function actor(request: FastifyRequest): Promise<Actor> {
     const value = await auth.api.getSession({ headers: authHeaders(request) });
     if (!value?.user.emailVerified) throw new ApiError(401, "VERIFIED_SESSION_REQUIRED");
-    return { id: value.user.id, email: value.user.email };
+    return { id: value.user.id, email: value.user.email, sessionId: value.session.id };
   }
+  registerRealtime(app, db, actor);
   app.get("/health/live", () => ({ status: "live" }));
   app.get("/health/ready", async (_request, reply) => {
     try { await pool.query("select 1"); await assertMigrations(pool); return { status: "ready" }; }
@@ -101,7 +105,7 @@ export async function createApp(config: Config, suppliedMailer?: Mailer) {
     const a = await actor(request);
     return db.transaction(async (tx) => {
       const { workspace, member } = await lockAccess(tx, a, WORKSPACE_ID);
-      return { workspace: { id: workspace.id, name: workspace.name, revision: workspace.revision, peopleRevision: workspace.peopleRevision, limits: { projects: workspace.maxProjects, processes: workspace.maxProcesses, tasks: workspace.maxTasks, people: workspace.maxPeople, editors: workspace.maxEditors, guests: workspace.maxGuests } }, role: member.role };
+      return { workspace: { id: workspace.id, name: workspace.name, revision: workspace.revision, peopleRevision: workspace.peopleRevision, limits: { projects: workspace.maxProjects, processes: workspace.maxProcesses, tasks: workspace.maxTasks, people: workspace.maxPeople, editors: workspace.maxEditors, guests: workspace.maxGuests } }, role: member.role, collaboration: 1 };
     });
   });
   app.get("/api/v1/projects", async (request) => {
@@ -123,7 +127,23 @@ export async function createApp(config: Config, suppliedMailer?: Mailer) {
   app.post("/api/v1/projects/:id/commands", async (request) => {
     const a = await actor(request), { id } = idParams.parse(request.params), e = envelopeSchema.parse(request.body);
     if (id !== e.projectId) throw new ApiError(400, "PROJECT_SCOPE_MISMATCH");
-    return commands.project(a, e);
+    const idHeader = request.headers["x-timeline-lease"], fenceHeader = request.headers["x-timeline-fence"];
+    const proof = idHeader !== undefined || fenceHeader !== undefined ? leaseProofSchema.parse({ id: idHeader, fence: Number(fenceHeader) }) : undefined;
+    return commands.project(a, e, proof);
+  });
+  const leases = new Leases(db);
+  app.post("/api/v1/projects/:id/leases", async (request) => {
+    const a = await actor(request), { id } = idParams.parse(request.params), e = envelopeSchema.parse(request.body);
+    if (id !== e.projectId) throw new ApiError(400, "PROJECT_SCOPE_MISMATCH");
+    return commands.acquireLease(a, e);
+  });
+  app.post("/api/v1/projects/:id/leases/:leaseId/renew", async (request) => {
+    const a = await actor(request), { id, leaseId } = z.strictObject({ id: z.uuid(), leaseId: z.uuid() }).parse(request.params), e = leaseActionSchema.parse(request.body);
+    return leases.action(a, WORKSPACE_ID, id, leaseId, e.fence, e.commandId, true);
+  });
+  app.delete("/api/v1/projects/:id/leases/:leaseId", async (request) => {
+    const a = await actor(request), { id, leaseId } = z.strictObject({ id: z.uuid(), leaseId: z.uuid() }).parse(request.params), e = leaseActionSchema.parse(request.body);
+    return leases.action(a, WORKSPACE_ID, id, leaseId, e.fence, e.commandId, false);
   });
   app.get("/api/v1/people", async (request) => {
     const a = await actor(request), { workspaceId } = querySchema.parse(request.query);

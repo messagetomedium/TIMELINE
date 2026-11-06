@@ -306,8 +306,8 @@ no migration or deletion is needed. The legacy per-user PUT endpoint still
 validates access and returns `{value}` with a deprecation warning, but no longer
 writes SQL. New projects do not create view rows. A pending view-only request from
 an old tab is adopted locally without HTTP; any accompanying content draft stays
-intact. There is no automatic migration of local projects, realtime or new
-infrastructure. SMTP errors log only a sanitized operational code; accepting a
+intact. There is no automatic migration of local projects or new infrastructure;
+server realtime is described under V2.1B below. SMTP errors log only a sanitized operational code; accepting a
 mail request does not confirm delivery. Outbound SMTP connectivity remains an
 operator responsibility.
 
@@ -338,6 +338,71 @@ SMTP исправляет оператор без выключения пров�
 на следующем защищённом запросе, уже показанный экран может оставаться до проверки.
 Это проверка доступа, без realtime/leases. Pages/local остаётся на IndexedDB без
 этих серверных действий. Production-развёртывание не входит в разработку V2.1A.
+
+## V2.1B: realtime, leases и будущее обновление
+
+В server mode изменения проекта, People и пространства передаются через SSE
+`/api/v1/realtime/events?after=N`. В событиях только workspace/project/command IDs,
+sequence и ревизии: без DTO, email, контактов, истории, токенов и вида. Источник —
+`workspace_events` PostgreSQL, записанный **в транзакции команды**; rollback/no-op/
+повтор receipt не создаёт нового события. Опрос журнала раз в секунду работает
+между Node-инстансами и после restart, без Redis/памяти как источника истины.
+Курсор читается до snapshot; пропуск, усечение истории или reconnect требуют
+авторитетного чтения и новой подписки. Сохраняются последние 2048 событий MEDIUM.
+Лимиты на Node-инстанс: 12 SSE-соединений, не более 3 на пользователя; heartbeat,
+повторная проверка действующей сессии/membership, backpressure/disconnect cleanup.
+Logout/revoke/expiry прекращают подписку. Гости продолжают отдельный безопасный
+read-only просмотр V2.1A, без подписки на командные события.
+
+Готовая команда проекта сначала проходит существующий planner на сервере. Lease
+захватывается на её вычисленный write-set, а не при наборе букв/просмотре. Процесс
+включает задачи и зависимые объекты; структурные изменения могут занять проект
+целиком. Независимые процессы могут держать разные leases одновременно. TTL 20 с
+по часам PostgreSQL, renewal клиента каждые 6 с, максимум 90 с на один захват;
+fence монотонен и привязан к сессии, исходному commandId/телу. Commit повторно
+проверяет доступ, срок/fence, зависимости, тот же набор и семантическую дельту,
+затем пишет данные/receipt/audit/outbox атомарно. Расширение каскада или изменение
+зависимостей отклоняется; чужая правка не перезаписывается. Более новая ревизия
+допустима лишь при доказанно независимом результате: для уже выданного lease —
+проверка исходных зависимостей и дельты; для устаревшей scalar-правки — ещё и
+непрерывная история без пересечения её набора. Остальные stale-намерения требуют
+явного review. Старые клиенты без lease-заголовков сохраняют строгую ревизию и
+транзакционный guard занятых объектов. Повтор неизвестного исхода использует
+прежние commandId/тело; сервер проверяет receipt до lease, поэтому истёкший lease
+не мешает подтвердить уже состоявшуюся запись.
+
+Все настройки представления остаются локальными: zoom, шаг/выходные, camera/pan/
+scroll, раскрытия, результаты, панели и workspace view. Они не создают HTTP-
+записей, outbox или leases. Входящие данные не перемонтируют таймлайн и не берут
+вид из SQL; незавершённый ввод, жест, диалог или неподтверждённая команда откладывают
+применение с понятным статусом. Свои события не вызывают повторного fetch после
+ACK. Обычное изменение проекта требует POST lease + POST command + GET проекта;
+renewal нужен только пока запрос действительно ожидает ACK. Server Undo/Redo
+по-прежнему недоступен без безопасных компенсирующих команд; фиктивного общего
+Undo или отката snapshot нет. Локальные IndexedDB и постоянная история сохранены.
+
+**Production сейчас не обновлять.** Для будущего отдельно разрешённого релиза
+нужен короткий maintenance window, без смеси старых и новых Node-версий:
+
+1. Проверенная внешняя копия и восстановление в **отдельную** тестовую БД. Путь
+   от V2.0B через V2.0C/V2.1A — прежние миграции 0000–0002; V2.1B добавляет только
+   `0003_realtime_leases` (3 новые таблицы), без удаления/перезаписи прежних данных
+   и SQL view. Репетиция pg_dump/restore/миграции проверяется integration-тестом.
+2. Остановить **все** старые app-инстансы до миграции: уже запущенная старая версия
+   не знает leases. Явно выполнить новую миграцию миграционной ролью и штатные grants
+   DML для app; автоматических миграций при старте нет, sequence-привилегии не нужны.
+3. Запустить один и тот же новый digest на всех app-инстансах, обновить конфигурацию
+   Caddy с `flush_interval -1`, проверить readiness и переподключение двух редакторов.
+   SSE помечен `no-store/no-transform`, без сжатия/буферизации. Новых портов нет.
+4. Перезагрузить интерфейсы клиентов. После ошибки/разрыва сверить pending, не
+   подменять неизвестный результат новой командой. Смена одного образа обратно не
+   является откатом БД: старый migration guard отвергнет версию 0003. Нужен forward
+   fix либо отдельное решение о восстановлении проверенной копии, с остановкой
+   приложения, истечением старых leases и сверкой неподтверждённых намерений.
+
+Рабочие VPS/БД/SMTP/S3/DNS в разработке не меняются. Реальная SMTP-доставка и общий
+накопительный релиз после следующих отдельно разрешённых этапов — отдельная
+эксплуатационная приёмка; Pages подтверждает только локальный режим.
 
 ## Build and local verification
 
@@ -526,3 +591,18 @@ V2.0C cases measure 60-second scroll/pan, requests, renders and p50/p95 for conf
 content actions; local fixture timings are not a production SLA. These browser
 checks use real Fastify/Better Auth/PostgreSQL and record no screenshots or video.
 Full required suites run on the protected PR; Pages deployment keeps local mode.
+
+For the V2.1B migration rehearsal, use the same disposable PostgreSQL 17 Docker
+container as `TEST_DATABASE_URL` and set `TEST_PG_CONTAINER` to its name/ID:
+
+```sh
+npm run test -- src/infrastructure/remote/RealtimeChannel.test.ts src/infrastructure/remote/RemoteCommandService.test.ts
+npm run server:test -- server/tests/lease-plan.test.ts
+TEST_DATABASE_URL=postgresql://TEST_OPERATOR@127.0.0.1/timeline_server_test TEST_PG_CONTAINER=TEST_PG17_CONTAINER npm run server:test -- server/tests/collaboration.test.ts server/tests/collaboration-migration.test.ts
+```
+
+The restore case uses `docker exec` with the local Docker socket and the container's
+PostgreSQL tools to create/drop **two separate temporary `_test` databases**. It
+never restores over `TEST_DATABASE_URL` or production. The test operator must have
+database/role creation privileges; the application test role remains restricted.
+CI supplies its existing PG17 service ID, without another database service.

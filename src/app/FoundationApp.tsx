@@ -44,6 +44,7 @@ const noSubscribe = () => () => undefined;
 const noState = () => noRecovery;
 export function FoundationApp({ service, server }: { service: UIService; server?: { recovery: ServerRecovery; email: string; onLogout: () => Promise<void>; onLogin: () => void } }) {
   const [accessPanel, setAccessPanel] = useState<"team" | "share" | null>(null);
+  const [deferredUpdate, setDeferredUpdate] = useState(false);
   const recovery = server?.recovery;
   const recoveryState = useSyncExternalStore(recovery?.subscribe ?? noSubscribe, recovery?.getState ?? noState);
   const [readFailed, setReadFailed] = useState(false), [epoch, setEpoch] = useState(0), [showDrafts, setShowDrafts] = useState(false);
@@ -100,6 +101,29 @@ export function FoundationApp({ service, server }: { service: UIService; server?
       window.removeEventListener("hashchange", listener);
     };
   }, [refresh, recovery]);
+  const loaded = documents !== null;
+  useEffect(() => {
+    if (!recovery?.startRealtime || !loaded) return;
+    let alive = true, queued = false, flushing = false, timer: ReturnType<typeof setTimeout> | undefined;
+    const isAlive = () => alive, hasUpdates = () => queued;
+    const flush = async () => {
+      clearTimeout(timer); timer = undefined;
+      if (!alive || flushing || !queued) return;
+      const state = recovery.getState(), focused = document.activeElement;
+      const typing = (focused instanceof HTMLInputElement || focused instanceof HTMLTextAreaElement) && !focused.readOnly
+        && !["checkbox", "radio", "button", "submit", "range", "search"].includes(focused.type) && focused.getAttribute("role") !== "combobox" && !focused.closest("[data-presentation]");
+      const intentDialog = [...document.querySelectorAll('[role="dialog"],[role="alertdialog"]')].some((dialog) => !dialog.classList.contains("people-catalog") && !dialog.closest("[data-presentation]"));
+      if (writing.current || state.sending || state.pending || Object.keys(state.drafts).length || typing || intentDialog || document.querySelector('.timeline-surface.gesture-edit,.timeline-surface.gesture-pan')) {
+        setDeferredUpdate(true); timer = setTimeout(() => { void flush(); }, 150); return;
+      }
+      flushing = true; queued = false; setDeferredUpdate(false);
+      try { await refresh(true); }
+      catch (e) { if (isAlive()) report(e); }
+      finally { flushing = false; if (isAlive() && hasUpdates()) timer = setTimeout(() => { void flush(); }, 80); }
+    };
+    const stop = recovery.startRealtime(async () => { queued = true; await flush(); });
+    return () => { alive = false; clearTimeout(timer); stop(); };
+  }, [recovery, loaded, refresh]);
   const run = useCallback(
     (operation: () => Promise<unknown>) => {
       writing.current += 1;
@@ -269,6 +293,9 @@ export function FoundationApp({ service, server }: { service: UIService; server?
               : "Открываем хранилище…"}
         </span>
         {server && <>{!!Object.keys(recoveryState.drafts).length && !recoveryState.pending && <button onClick={() => { setShowDrafts((open) => !open); }}>Черновик</button>}<span>{server.email}</span><button disabled={busy || recoveryState.pending || !!Object.keys(recoveryState.drafts).length} onClick={() => { void server.onLogout().catch(report); }}>Выйти</button></>}
+        {recoveryState.synchronization && <span role="status" aria-label="Синхронизация">{deferredUpdate ? "Новые данные ожидают завершения вашей правки" : {
+          connecting: "Подключаем обновления…", live: "Обновления подключены", offline: "Нет связи с обновлениями; повторяем подключение", denied: "Доступ к обновлениям закрыт",
+        }[recoveryState.synchronization]}</span>}
       </header>
       {server && <>
         {accessPanel === "team" && <TeamAccess onClose={() => { setAccessPanel(null); }} onMembershipChanged={() => refresh()} />}

@@ -7,6 +7,7 @@
   respond @private 404
   encode zstd gzip
   reverse_proxy app:8080 {
+    flush_interval -1
     # Do not trust client-supplied forwarding headers.
     header_up X-Forwarded-For {remote_host}
     header_up X-Forwarded-Proto https

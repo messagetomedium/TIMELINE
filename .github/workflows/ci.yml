@@ -43,7 +43,21 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm run test
-      - run: npx playwright install --with-deps chromium webkit
+      # Browser binaries survive across ephemeral GitHub runners via cache.
+      # OS libraries are installed separately: apt dependencies cannot be cached.
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+      - name: Install Playwright system dependencies
+        run: npx playwright install-deps chromium webkit
+        timeout-minutes: 8
+      - name: Download Playwright browsers only on cache miss
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install chromium webkit
+        timeout-minutes: 8
       - run: npm run test:e2e
       - uses: actions/upload-artifact@v4
         if: failure()
@@ -82,8 +96,24 @@ jobs:
         if: needs.changes.outputs.frontend != 'true'
       - run: npm run server:typecheck
       - run: npm run build
-      - run: npx playwright install --with-deps chromium webkit
+      # Browser binaries survive across ephemeral GitHub runners via cache.
+      # OS libraries are installed separately: apt dependencies cannot be cached.
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+      - name: Install Playwright system dependencies
+        run: npx playwright install-deps chromium webkit
+        timeout-minutes: 8
+      - name: Download Playwright browsers only on cache miss
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install chromium webkit
+        timeout-minutes: 8
       - run: npm run server:test
+        env:
+          TEST_PG_CONTAINER: ${{ job.services.postgres.id }}
   package:
     needs: changes
     if: needs.changes.outputs.package == 'true'

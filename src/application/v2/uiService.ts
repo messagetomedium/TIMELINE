@@ -7,6 +7,7 @@ export type UIService = Pick<CommandService,
 > & { screen: (id: string | null, afterCommand?: boolean) => ReturnType<CommandService["screen"]> } & { [K in Mutations]: (...args: Parameters<CommandService[K]>) => Promise<unknown> };
 
 export interface RecoveryState {
+  synchronization?: "connecting" | "live" | "offline" | "denied";
   pending: boolean;
   sending: boolean;
   message: string;
@@ -16,6 +17,7 @@ export interface RecoveryState {
   drafts: Readonly<Record<string, string>>;
 }
 export interface ServerRecovery {
+  startRealtime?: (invalidated: () => Promise<void>) => () => void;
   subscribe: (listener: () => void) => () => void;
   getState: () => RecoveryState;
   retry: () => Promise<string | null>;

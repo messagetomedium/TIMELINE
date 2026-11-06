@@ -2,7 +2,11 @@ export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
   constructor(status: number, code: string) {
-    const message = code === "INVITATION_INVALID" ? "Приглашение недействительно: срок истёк, доступ отозван, оно уже принято или предназначено другому email. Войдите с email получателя либо запросите новое приглашение."
+    const message = code === "LEASE_OWNER_REQUIRED" ? "Право изменения принадлежит другой сессии. Исходная правка сохранена; дождитесь освобождения права и повторите запрос."
+      : code === "LEASE_BUSY" ? "Эту работу или зависимые объекты сейчас изменяет другой участник. Правка сохранена; повторите исходный запрос позже."
+      : code === "LEASE_STALE" ? "Право на изменение истекло или было отозвано. Правка сохранена; повторите исходный запрос либо сверьте актуальные данные."
+      : code === "LEASE_LIMIT" ? "Слишком много незавершённых изменений. Завершите правку в других вкладках и повторите запрос."
+      : code === "INVITATION_INVALID" ? "Приглашение недействительно: срок истёк, доступ отозван, оно уже принято или предназначено другому email. Войдите с email получателя либо запросите новое приглашение."
       : code === "EDITOR_LIMIT" ? "Все места MEDIUM заняты: владелец и 3 администратора. Обратитесь к владельцу."
       : code === "OWNER_REQUIRED" ? "Отозвать участника может только владелец; владельца отозвать нельзя."
       : code === "MAIL_UNAVAILABLE" ? "Почтовый сервис недоступен. Приглашение не отправлено и отозвано; сообщите администратору."
@@ -18,16 +22,17 @@ export class ApiError extends Error {
     this.code = code;
   }
 }
-export type RequestApi = (path: string, method?: string, body?: unknown) => Promise<unknown>;
+export type RequestApi = (path: string, method?: string, body?: unknown, options?: { headers: Record<string, string> }) => Promise<unknown>;
 /** Cookies stay HttpOnly; no session secrets, actor IDs or configurable foreign hosts. */
-export const requestApi: RequestApi = async (path, method = "GET", body) => {
+export const requestApi: RequestApi = async (path, method = "GET", body, options) => {
   if (!path.startsWith("/api/") || path.startsWith("//")) throw Error("Неверный адрес API");
   if (typeof navigator !== "undefined" && "onLine" in navigator && !navigator.onLine) throw new ApiError(0, "OFFLINE");
   const controller = new AbortController(), timeout = setTimeout(() => { controller.abort(); }, 15_000);
   try {
     const response = await fetch(path, {
       method, credentials: "same-origin", cache: "no-store", signal: controller.signal,
-      ...(body === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      ...(body === undefined && !options ? {} : { headers: { ...(body === undefined ? {} : { "Content-Type": "application/json" }), ...options?.headers } }),
     });
     const value: unknown = await response.json().catch(() => null);
     if (!response.ok) {

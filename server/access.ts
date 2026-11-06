@@ -4,7 +4,7 @@ import { ApiError, requireValue } from "./errors";
 import type { QueryDatabase } from "./db/connection";
 import * as t from "./db/schema";
 
-export interface Actor { id: string; email: string }
+export interface Actor { id: string; email: string; sessionId: string }
 export async function activeMember(db: QueryDatabase, workspaceId: string, userId: string) {
   const [member] = await db.select().from(t.memberships).where(and(
     eq(t.memberships.workspaceId, workspaceId), eq(t.memberships.userId, userId), isNull(t.memberships.revokedAt),

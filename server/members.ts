@@ -10,6 +10,7 @@ import type { Config } from "./config";
 import type { Mailer } from "./mailer";
 import { ApiError } from "./errors";
 import { teamSchema } from "../src/application/v2/accessContracts";
+import { appendEvent } from "./outbox";
 
 export const opaqueToken = () => randomBytes(32).toString("base64url");
 // Purpose is included so an invite can never be exchanged as a guest credential.
@@ -69,6 +70,7 @@ export class Members {
       }
       await db.update(t.invitations).set({ usedCount: invite.usedCount + 1 }).where(eq(t.invitations.id, invite.id));
       await db.update(t.workspaces).set({ revision: workspace.revision + 1 }).where(eq(t.workspaces.id, workspace.id));
+      await appendEvent(db, workspace.id, { commandId: null, projectId: null, revision: workspace.revision + 1, workspaceRevision: workspace.revision + 1, peopleRevision: workspace.peopleRevision, changed: true }, ["workspace:members"]);
       return { workspaceId: workspace.id, role: member?.role === "owner" ? "owner" : "admin" };
     });
   }
@@ -90,6 +92,8 @@ export class Members {
       await db.update(t.invitations).set({ revokedAt: new Date() }).where(and(eq(t.invitations.workspaceId, workspace.id), eq(t.invitations.creatorId, userId)));
       await db.update(t.guestLinks).set({ revokedAt: new Date() }).where(and(eq(t.guestLinks.workspaceId, workspace.id), eq(t.guestLinks.creatorId, userId)));
       await db.update(t.workspaces).set({ revision: workspace.revision + 1 }).where(eq(t.workspaces.id, workspace.id));
+      await db.delete(t.editLeases).where(and(eq(t.editLeases.workspaceId, workspace.id), eq(t.editLeases.ownerId, userId)));
+      await appendEvent(db, workspace.id, { commandId: null, projectId: null, revision: workspace.revision + 1, workspaceRevision: workspace.revision + 1, peopleRevision: workspace.peopleRevision, changed: true }, ["workspace:members"]);
     });
   }
 }
