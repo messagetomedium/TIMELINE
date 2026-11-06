@@ -82,9 +82,10 @@ auth, приглашения и гостевой обмен ограничены
 | GET `/people`, POST `/people/commands` | Каталог и PeopleEnvelope с его expectedRevision |
 | POST `/workspace/commands` | ArchiveProject (archived true/false), ReorderProjects (order), DuplicateProject (id, expectedProjectRevision); envelope как у создания, плюс command |
 | PUT `/projects/:id/view` | Устаревший совместимый endpoint: проверяет workspaceId/value и возвращает `{value}` с Deprecation; SQL не изменяет. V2.0C хранит вид локально в сессии вкладки |
+| GET `/team` | Только участникам MEDIUM: роли, действующие участники, статусы/сроки приглашений, лимиты; без токенов |
 | POST `/invitations`, POST `/invitations/accept` | email / token; подтверждённый email, одно использование, 7 дней, лимит owner+3 admins |
 | DELETE `/invitations/:id`, DELETE `/members/:id` | Отзыв; участника отзывает owner, owner удалить нельзя |
-| POST `/projects/:id/guest-links`, DELETE `/guest-links/:id` | Выдать/отозвать ссылку одного проекта; UI не реализован |
+| GET/POST `/projects/:id/guest-links`, DELETE `/guest-links/:id` | Метаданные без токенов / выдача / отзыв. UI «Поделиться просмотром»; raw token только при выпуске |
 | POST `/guest/exchange`, GET `/guest/project` | Обмен token на часовую ограниченную cookie; только чтение, лимит 6 сессий |
 
 Пример содержательной команды (UUID/ревизии берутся из ответов API):

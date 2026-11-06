@@ -4,6 +4,7 @@ import './styles/tokens.css';
 import './styles/app.css';
 import './styles/projects.css';
 import './styles/identity.css';
+import { consumeAccessLink } from './app/accessLink';
 
 const root = document.getElementById('root');
 if (!root) throw new Error('Application root is missing');
@@ -17,13 +18,14 @@ async function start(root: HTMLElement) {
     const service = new CommandService(new V2Repository());
     createRoot(root).render(<StrictMode><FoundationApp service={service} /></StrictMode>);
   } else if (mode === 'server') {
+    const accessLink = consumeAccessLink(location, history);
     const params = new URLSearchParams(location.search);
     const resetToken = params.get('token') ?? undefined;
     const verified = params.get('auth') === 'verified';
     // Mail tokens live only in memory, never in storage or subsequent URL/referrer.
     if (location.search) history.replaceState(null, '', location.pathname + location.hash);
     const { ServerApp } = await import('./app/ServerApp');
-    createRoot(root).render(<StrictMode><ServerApp {...(resetToken ? { resetToken } : {})} verified={verified} /></StrictMode>);
+    createRoot(root).render(<StrictMode><ServerApp {...(resetToken ? { resetToken } : {})} {...(accessLink ? { accessLink } : {})} verified={verified} /></StrictMode>);
   } else {
     root.textContent = 'Не задан режим хранения TIMELINE. Проверьте конфигурацию размещения.';
   }

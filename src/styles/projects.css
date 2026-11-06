@@ -51,6 +51,26 @@ button:disabled { cursor:wait; opacity:.55; }
 .workspace-dialog .form-error { color:#ac5959; }
 .dialog-footer { display:flex; gap:10px; justify-content:flex-end; padding-top:4px; }
 .workspace-dialog .checkbox-label { flex-direction:row; align-items:center; }
+.access-dialog { width:min(660px,100%); }
+.access-list { margin:0; padding:0; list-style:none; display:grid; gap:16px; }
+.access-list li { display:flex; flex-direction:column; align-items:flex-start; gap:8px; padding-bottom:12px; border-bottom:1px solid var(--line); overflow-wrap:anywhere; }
+.access-list span { font-size:12px; color:var(--ink-muted); }
+.access-dialog form { display:grid; gap:12px; }
+.guest-project { display:flex; flex-direction:column; gap:24px; }
+.guest-timeline { flex:1 0 360px; overflow:auto; touch-action:auto; border:1px solid var(--line); }
+.guest-timeline .calendar-row:not(.guest-checkpoints) { position:sticky; top:0; z-index:8; }
+.guest-timeline .stage-row { position:sticky; top:80px; z-index:7; }
+.guest-timeline .guest-checkpoints { position:sticky; top:148px; z-index:6; background:var(--tl-paper); }
+.guest-time-track { position:relative; overflow:hidden; }
+.guest-checkpoints .section-gutter { padding-block:8px; }
+.guest-row-labels { border-right:1px solid var(--line); }
+.guest-row-label { padding:7px 12px; border-bottom:1px solid var(--line); overflow:hidden; }
+.guest-row-label h3 { font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.guest-row-label small { font-size:9px; color:var(--ink-muted); }
+.guest-row-label.guest-task { padding-left:24px; }
+.guest-timeline .bar-title { padding-inline:6px; }
+.guest-timeline .inactive-work { opacity:.45; border-style:dashed; }
+.guest-result { height:32px; padding:7px; font-size:11px; overflow:hidden; }
 .checkbox-label input { width:auto; }
 .portfolio.timeline-surface { flex:1; margin:0 24px 24px; border:1px solid #dce2e9; border-radius:9px; min-height:250px; background:#fff; --gutter-width:240px; }
 .portfolio-body { flex:1; overflow-y:auto; overflow-x:hidden; scrollbar-width:none; }

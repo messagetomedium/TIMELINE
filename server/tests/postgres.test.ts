@@ -15,6 +15,7 @@ import type { ContentCommand } from "../../src/domain/v2/commands";
 import type { CommandResult } from "../commands";
 import { hashPayload } from "../commands";
 import { tokenHash } from "../members";
+import { teamSchema, guestLinksSchema } from "../../src/application/v2/accessContracts";
 
 const origin = "https://timeline.test";
 const password = "Temporary test password 2026!";
@@ -332,8 +333,19 @@ describe("real PostgreSQL command and security boundary", () => {
     expect((await request("DELETE", `/api/v1/members/${ownerId}`, member)).statusCode).toBe(403);
     expect((await request("DELETE", `/api/v1/members/${ownerId}`, ownerCookie)).statusCode).toBe(403);
     const outstanding = await invite("later@example.test", member);
+    const memberLink = (await request("POST", `/api/v1/projects/${result.projectId ?? ""}/guest-links`, member)).json<{ id: string; url: string }>();
+    const guestSession = await request("POST", "/api/v1/guest/exchange", "", { token: new URL(memberLink.url).hash.slice(1) });
+    expect(guestSession.statusCode).toBe(200);
+    let project = await read(result.projectId ?? ""); const personId = randomUUID(), assignmentId = randomUUID();
+    project = await execute(project, { type: "CreatePersonAndAssign", id: assignmentId, kind: "process", targetId: project.processes[0]?.id ?? "", personId, fields: { firstName: "Исполнитель", lastName: "", defaultRole: "Лид", contacts: "private fixture contact", note: "" }, roleLabel: "Лид" });
+    await admin.query("update people set linked_user_id=$1 where id=$2", [id, personId]);
     expect((await request("DELETE", `/api/v1/members/${id}`, ownerCookie)).statusCode).toBe(200);
+    expect((await read(project.project.id)).assignments).toEqual(project.assignments);
+    const people = (await request("GET", "/api/v1/people", ownerCookie)).json<{ people: { id: string; linkedUserId: string | null; archivedAt: string | null }[] }>().people;
+    expect(people).toContainEqual(expect.objectContaining({ id: personId, linkedUserId: id, archivedAt: null }));
     expect((await request("GET", "/api/v1/projects", member)).statusCode).toBe(403);
+    expect((await request("GET", "/api/v1/guest/project", cookieOf(guestSession))).statusCode).toBe(403);
+    expect(guestLinksSchema.parse((await request("GET", `/api/v1/projects/${project.project.id}/guest-links`, ownerCookie)).json<unknown>()).links[0]?.status).toBe("revoked");
     const later = await register("later@example.test"); expect((await accept(later, outstanding.token)).statusCode).toBe(403);
     const stored = await admin.query<{ token_hash: string }>("select token_hash from workspace_invitations where id = $1", [invitation.id]);
     expect(stored.rows[0]?.token_hash).toBe(tokenHash("invite", invitation.token)); expect(stored.rows[0]?.token_hash).not.toContain(invitation.token);
@@ -348,6 +360,50 @@ describe("real PostgreSQL command and security boundary", () => {
     const accepted = await Promise.all([accept(left, a.token), accept(right, b.token)]);
     expect(accepted.map((r) => r.statusCode).sort()).toEqual([200, 409]);
     expect((await admin.query("select user_id from workspace_memberships where revoked_at is null")).rowCount).toBe(2);
+  });
+
+  it("V2.1A exposes scoped token-free team/link lists, seven-day statuses and the default four-editor limit", async () => {
+    const outsider = await register("outside-team@example.test");
+    await register("unverified-team@example.test", false);
+    expect((await request("GET", "/api/v1/team", outsider)).statusCode).toBe(403);
+    expect((await request("GET", "/api/v1/team")).statusCode).toBe(401);
+    expect((await request("POST", "/api/v1/invitations", outsider, { email: "nobody@example.test" })).statusCode).toBe(403);
+    const { result } = await create(), id = result.projectId ?? "";
+    expect((await request("GET", `/api/v1/projects/${id}/guest-links`, outsider)).statusCode).toBe(403);
+    expect((await request("POST", `/api/v1/projects/${id}/guest-links`, outsider)).statusCode).toBe(403);
+    expect((await request("GET", `/api/v1/projects/${id}/guest-links?workspaceId=${randomUUID()}`, ownerCookie)).statusCode).toBe(403);
+    expect((await request("GET", `/api/v1/projects/${randomUUID()}/guest-links`, ownerCookie)).statusCode).toBe(404);
+    const another = await create("Other project");
+    expect(guestLinksSchema.parse((await request("GET", `/api/v1/projects/${another.result.projectId ?? ""}/guest-links`, ownerCookie)).json<unknown>()).links).toEqual([]);
+    const stale = await invite("stale-team@example.test"), staleCookie = await register("stale-team@example.test");
+    const before = teamSchema.parse((await request("GET", "/api/v1/team", ownerCookie)).json<unknown>());
+    const pending = before.invitations.find((i) => i.id === stale.id);
+    expect(pending?.status).toBe("pending"); expect(new Date(pending?.expiresAt ?? "").getTime() - Date.now()).toBeGreaterThan(6.99 * 86_400_000);
+    await admin.query("update workspace_invitations set expires_at=now()-interval '1 second' where id=$1", [stale.id]);
+    expect((await accept(staleCookie, stale.token)).statusCode).toBe(403);
+    expect((await accept("", stale.token)).statusCode).toBe(401);
+    for (let n = 0; n < 3; n++) {
+      const email = `team-${String(n)}@example.test`, cookie = await register(email), invitation = await invite(email);
+      expect((await accept(cookie, invitation.token)).statusCode).toBe(200);
+      const response = await request("GET", "/api/v1/team", cookie), team = teamSchema.parse(response.json<unknown>());
+      expect(team.role).toBe("admin"); expect(team.limits).toEqual({ editors: 4, guests: 6 });
+      expect(team.invitations.find((i) => i.id === invitation.id)?.status).toBe("used");
+      expect(team.invitations.find((i) => i.id === stale.id)?.status).toBe("expired");
+      expect(response.body).not.toContain(invitation.token); expect(response.body).not.toMatch(/tokenHash|token_hash|password|contacts|note|session/);
+      if (n === 0) {
+        const cancelled = await invite("cancelled-by-admin@example.test");
+        expect((await request("DELETE", `/api/v1/invitations/${cancelled.id}`, cookie)).statusCode).toBe(200);
+        expect(teamSchema.parse((await request("GET", "/api/v1/team", cookie)).json<unknown>()).invitations.find((i) => i.id === cancelled.id)?.status).toBe("revoked");
+        const issued = (await request("POST", `/api/v1/projects/${id}/guest-links`, cookie)).json<{ id: string; url: string }>();
+        const metadata = await request("GET", `/api/v1/projects/${id}/guest-links`, ownerCookie);
+        expect(guestLinksSchema.parse(metadata.json<unknown>()).links).toEqual([{ id: issued.id, projectId: id, permissions: "read", status: "active" }]);
+        expect(metadata.body).not.toContain(new URL(issued.url).hash.slice(1)); expect(metadata.body).not.toMatch(/token|email|creator/);
+        await request("DELETE", `/api/v1/guest-links/${issued.id}`, cookie);
+        expect(guestLinksSchema.parse((await request("GET", `/api/v1/projects/${id}/guest-links`, cookie)).json<unknown>()).links[0]?.status).toBe("revoked");
+      }
+    }
+    expect(teamSchema.parse((await request("GET", "/api/v1/team", ownerCookie)).json<unknown>()).members).toHaveLength(4);
+    expect((await request("POST", "/api/v1/invitations", ownerCookie, { email: "fifth@example.test" })).statusCode).toBe(409);
   });
 
   it("verifies email and resets passwords through mailer; reset invalidates the previous session", async () => {
@@ -376,10 +432,16 @@ describe("real PostgreSQL command and security boundary", () => {
     for (const excluded of ["assignments", "people", "contacts", "description", "creatorId", "workspaceId", "auth", "note"]) expect(view.body).not.toContain(`"${excluded}"`);
     expect((await request("GET", "/api/v1/projects", cookie)).statusCode).toBe(401);
     expect((await request("POST", `/api/v1/projects/${id}/commands`, cookie, envelope(await read(id), { type: "ShiftProject", days: 1 }))).statusCode).toBe(401);
-    await admin.query("update workspaces set max_guests = 1 where id = $1", [WORKSPACE_ID]);
+    const sessions = [cookie];
+    for (let n = 1; n < 6; n++) {
+      const extra = await request("POST", "/api/v1/guest/exchange", "", { token }); expect(extra.statusCode).toBe(200); sessions.push(cookieOf(extra));
+    }
     expect((await request("POST", "/api/v1/guest/exchange", "", { token })).statusCode).toBe(429);
+    await admin.query("update guest_sessions set expires_at=now()-interval '1 second' where token_hash=$1", [tokenHash("guest-session", cookie.split("=")[1] ?? "")]);
+    expect((await request("GET", "/api/v1/guest/project", cookie)).statusCode).toBe(401);
+    expect((await request("POST", "/api/v1/guest/exchange", "", { token })).statusCode).toBe(200);
     expect((await request("DELETE", `/api/v1/guest-links/${link.id}`, ownerCookie)).statusCode).toBe(200);
-    expect((await request("GET", "/api/v1/guest/project", cookie)).statusCode).toBe(403);
+    expect((await request("GET", "/api/v1/guest/project", sessions[1])).statusCode).toBe(403);
     expect((await request("POST", "/api/v1/guest/exchange", "", { token })).statusCode).toBe(403);
   });
 

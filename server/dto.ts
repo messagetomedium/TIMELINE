@@ -1,10 +1,10 @@
 import { z } from "zod";
-import { dateOnlySchema } from "../src/domain/schema";
 import { peopleEnvelopeSchema } from "../src/domain/v2/people";
 
 export { createProjectSchema, workspaceCommandSchema, viewSchema } from "../src/application/v2/apiContracts";
 export type { CreateProject, WorkspaceCommand } from "../src/application/v2/apiContracts";
 export { peopleEnvelopeSchema };
+export { guestProjectSchema } from "../src/application/v2/accessContracts";
 export const inviteSchema = z.strictObject({ email: z.email().max(254).transform((s) => s.toLowerCase()) });
 export const tokenSchema = z.strictObject({ token: z.string().regex(/^[\w-]{43}$/) });
 export const idParams = z.strictObject({ id: z.uuid() });
@@ -20,14 +20,3 @@ export function boundedInput(value: unknown, depth = 0): void {
     for (const v of Object.values(value)) boundedInput(v, depth + 1);
   }
 }
-
-
-/** Deliberately excludes people, contacts, assignments, preferences, history and auth. */
-export const guestProjectSchema = z.strictObject({
-  project: z.strictObject({ id: z.uuid(), name: z.string(), startDate: dateOnlySchema, endDateExclusive: dateOnlySchema, revision: z.number().int() }),
-  stages: z.array(z.strictObject({ id: z.uuid(), title: z.string(), startDate: dateOnlySchema, endDateExclusive: dateOnlySchema, sortIndex: z.number().int() })),
-  processes: z.array(z.strictObject({ id: z.uuid(), stageId: z.uuid(), isActive: z.boolean(), title: z.string(), startDate: dateOnlySchema, endDateExclusive: dateOnlySchema, status: z.string(), color: z.string() })),
-  tasks: z.array(z.strictObject({ id: z.uuid(), processId: z.uuid(), isActive: z.boolean(), title: z.string(), startDate: dateOnlySchema, endDateExclusive: dateOnlySchema, status: z.string() })),
-  results: z.array(z.strictObject({ id: z.uuid(), stageId: z.uuid(), processId: z.uuid().nullable(), title: z.string() })),
-  checkpoints: z.array(z.strictObject({ id: z.uuid(), title: z.string(), date: dateOnlySchema })),
-});

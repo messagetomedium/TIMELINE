@@ -2,7 +2,11 @@ export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
   constructor(status: number, code: string) {
-    const message = status === 401 ? "Сессия завершена. Войдите снова; несохранённая правка сохранена в этой вкладке."
+    const message = code === "INVITATION_INVALID" ? "Приглашение недействительно: срок истёк, доступ отозван, оно уже принято или предназначено другому email. Войдите с email получателя либо запросите новое приглашение."
+      : code === "EDITOR_LIMIT" ? "Все места MEDIUM заняты: владелец и 3 администратора. Обратитесь к владельцу."
+      : code === "OWNER_REQUIRED" ? "Отозвать участника может только владелец; владельца отозвать нельзя."
+      : code === "MAIL_UNAVAILABLE" ? "Почтовый сервис недоступен. Приглашение не отправлено и отозвано; сообщите администратору."
+      : status === 401 ? "Сессия завершена. Войдите снова; несохранённая правка сохранена в этой вкладке."
       : status === 403 ? "Нет доступа к рабочему пространству. Обратитесь к администратору."
       : code === "REVISION_CONFLICT" ? "Данные изменились на сервере. Ваша правка сохранена для сверки."
       : code === "COMMAND_ID_REUSED" ? "Сервер отклонил повтор с другим содержимым. Правка сохранена."
@@ -23,8 +27,7 @@ export const requestApi: RequestApi = async (path, method = "GET", body) => {
   try {
     const response = await fetch(path, {
       method, credentials: "same-origin", cache: "no-store", signal: controller.signal,
-      headers: { "Content-Type": "application/json" },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      ...(body === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
     });
     const value: unknown = await response.json().catch(() => null);
     if (!response.ok) {
