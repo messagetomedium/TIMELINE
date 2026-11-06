@@ -210,7 +210,7 @@ describe("real PostgreSQL command and security boundary", () => {
     expect((await read(d.project.id)).project.revision).toBe(0);
   });
 
-  it("persists normalized project/planner changes and personal views across server restart", async () => {
+  it("persists commands and reads legacy views without any new SQL presentation writes", async () => {
     const { result } = await create(); let d = await read(result.projectId ?? "");
     expect(d.stages).toHaveLength(2); expect(d.processes).toHaveLength(4); expect(d.tasks).toHaveLength(8);
     d = await execute(d, { type: "Rename", kind: "project", id: d.project.id, value: "Persisted" });
@@ -219,8 +219,13 @@ describe("real PostgreSQL command and security boundary", () => {
     const process = d.processes[0]; expect(process).toBeDefined();
     d = await execute(d, { type: "SetWorkStatus", kind: "process", id: process?.id ?? "", status: "В работе" });
     d = await execute(d, { type: "Rename", kind: "task", id: d.tasks[0]?.id ?? "", value: "Changed task" });
+    expect((await admin.query<{ count: string }>("select count(*) from view_preferences where scope=$1", [`project:${d.project.id}`])).rows[0]?.count).toBe("0");
     const view = { ...d.viewPreferences, zoomPxPerDay: 60 };
-    expect((await request("PUT", `/api/v1/projects/${d.project.id}/view`, ownerCookie, { workspaceId: WORKSPACE_ID, value: view })).statusCode).toBe(200);
+    await admin.query("insert into view_preferences(workspace_id,user_id,scope,value) values($1,$2,$3,$4)", [WORKSPACE_ID, ownerId, `project:${d.project.id}`, JSON.stringify(view)]);
+    const legacy = await request("PUT", `/api/v1/projects/${d.project.id}/view`, ownerCookie, { workspaceId: WORKSPACE_ID, value: { ...view, zoomPxPerDay: 72 } });
+    expect(legacy.statusCode).toBe(200); expect(legacy.headers.deprecation).toBe("true");
+    expect(legacy.json<{ value: { zoomPxPerDay: number } }>().value.zoomPxPerDay).toBe(72);
+    expect((await admin.query<{ value: { zoomPxPerDay: number } }>("select value from view_preferences where scope=$1", [`project:${d.project.id}`])).rows[0]?.value.zoomPxPerDay).toBe(60);
     const summary = (await request("GET", "/api/v1/projects?limit=1", ownerCookie)).json<{ projects: object[]; nextOffset: number }>();
     expect(Object.keys(summary.projects[0] ?? {})).toEqual(["project"]); expect(summary.nextOffset).toBe(1);
     const revision = d.project.revision;

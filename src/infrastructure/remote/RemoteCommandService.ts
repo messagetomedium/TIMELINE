@@ -3,26 +3,23 @@ import { envelopeSchema } from "../../domain/v2/commands";
 import type { CommandEnvelope, ContentCommand } from "../../domain/v2/commands";
 import { peopleEnvelopeSchema } from "../../domain/v2/people";
 import type { PeopleEnvelope } from "../../domain/v2/people";
+import type { CatalogState } from "../../domain/v2/peopleModel";
 import { catalogSchema } from "../../domain/v2/peopleModel";
 import { WORKSPACE_ID, snapshotSchema } from "../../domain/v2/model";
 import type { Snapshot } from "../../domain/v2/model";
 import { projectIdSchema } from "../../domain";
 import type { ProjectId, ViewPreferences } from "../../domain";
-import { defaultPreferences, workspacePreferencesSchema } from "../../application/workspace/model";
+import { defaultPreferences } from "../../application/workspace/model";
 import type { WorkspacePreferences } from "../../application/workspace/model";
 import { projectSummarySchema, emptyPortfolio } from "../../application/v2/portfolio";
 import type { PortfolioCommand } from "../../application/v2/portfolio";
 import { createProjectSchema, workspaceCommandSchema, viewSchema, commandResultSchema } from "../../application/v2/apiContracts";
 import type { UIService, ServerRecovery, RecoveryState } from "../../application/v2/uiService";
 import { v2BackupSchema } from "../../application/v2/backup";
+import { SessionPresentation, tabStorage } from "./SessionPresentation";
 import { ApiError, requestApi } from "./ApiClient";
 import type { RequestApi } from "./ApiClient";
 
-const tabStorage = {
-  getItem: (key: string) => sessionStorage.getItem(key),
-  setItem: (key: string, value: string) => { sessionStorage.setItem(key, value); },
-  removeItem: (key: string) => { sessionStorage.removeItem(key); },
-};
 const pendingSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("project"), body: envelopeSchema }),
   z.object({ kind: z.literal("create"), body: createProjectSchema }),
@@ -30,7 +27,7 @@ const pendingSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("people"), body: peopleEnvelopeSchema }),
   z.object({ kind: z.literal("view"), projectId: projectIdSchema, body: viewSchema }),
 ]);
-type Pending = z.infer<typeof pendingSchema>;
+type Pending = Exclude<z.infer<typeof pendingSchema>, { kind: "view" }>; // legacy view records are migrated locally, never retried over HTTP
 const storedSchema = z.object({ pending: pendingSchema.nullable(), drafts: z.record(z.string(), z.string()) });
 const workspaceSchema = z.object({ workspace: z.object({ id: z.literal(WORKSPACE_ID), revision: z.number().int().nonnegative() }), role: z.string() });
 const pageSchema = z.object({ projects: z.array(projectSummarySchema), workspaceRevision: z.number().int().nonnegative(), nextOffset: z.number().int().nonnegative().nullable() });
@@ -48,14 +45,24 @@ export class RemoteCommandService implements UIService, ServerRecovery {
   private documents: z.infer<typeof projectSummarySchema>[] = [];
   private ownRevisions = new Map<string, Map<number, number>>();
   private preferences: WorkspacePreferences = defaultPreferences;
-  private views: Record<string, ViewPreferences> = {};
+  private readonly presentation: SessionPresentation;
+  private catalog: CatalogState | null = null;
+  private metadataDirty = true;
+  private catalogDirty = false;
+  private dirtyProjects = new Set<string>();
+  private generation = 0;
+  private reads = new Map<string, ReturnType<UIService["screen"]>>();
   constructor(userId: string, api = requestApi, storage: Pick<Storage, "getItem" | "setItem" | "removeItem"> = tabStorage) {
-    this.api = api; this.storage = storage; this.key = `timeline-api-draft-v1:${userId}`;
+    this.api = api; this.storage = storage; this.presentation = new SessionPresentation(userId, storage); this.key = `timeline-api-draft-v1:${userId}`;
     try {
       const raw = storage.getItem(this.key);
       if (raw) {
         const restored = storedSchema.parse(JSON.parse(raw) as unknown);
-        this.pending = restored.pending;
+        if (restored.pending?.kind === "view") {
+          this.presentation.saveView(restored.pending.projectId, restored.pending.body.value);
+          // Preserve any content input captured beside an old view request.
+          try { this.storage.setItem(this.key, JSON.stringify({ pending: null, drafts: restored.drafts })); } catch { /* A retired UI intent cannot block content. */ }
+        } else this.pending = restored.pending;
         this.drafts = restored.drafts;
         this.state = { ...this.state, drafts: restored.drafts, pending: !!this.pending,
           intent: this.pending ? JSON.stringify(this.pending.body, null, 2) : "",
@@ -108,30 +115,33 @@ export class RemoteCommandService implements UIService, ServerRecovery {
       const path = pending.kind === "project" ? `/api/v1/projects/${pending.body.projectId}/commands`
         : pending.kind === "create" ? "/api/v1/projects"
         : pending.kind === "workspace" ? "/api/v1/workspace/commands"
-        : pending.kind === "people" ? "/api/v1/people/commands"
-        : `/api/v1/projects/${pending.projectId}/view`;
-      const response = await this.api(path, pending.kind === "view" ? "PUT" : "POST", pending.body);
+        : "/api/v1/people/commands";
+      const response = await this.api(path, "POST", pending.body);
       let projectId: string | null = null;
-      if (pending.kind === "view") {
-        this.views[pending.projectId] = viewSchema.shape.value.parse(z.object({ value: z.unknown() }).parse(response).value);
-      } else {
-        const result = commandResultSchema.parse(response);
-        if (result.commandId !== pending.body.commandId) throw Error("Сервер не подтвердил исходную команду");
-        projectId = result.projectId;
-        this.revision = result.workspaceRevision;
-        if (pending.kind === "project" && result.revision !== pending.body.expectedRevision) {
+      const result = commandResultSchema.parse(response);
+      if (result.commandId !== pending.body.commandId) throw Error("Сервер не подтвердил исходную команду");
+      projectId = result.projectId;
+      this.generation++;
+      this.metadataDirty ||= pending.kind === "create" || pending.kind === "workspace" || pending.kind === "people" || this.revision !== result.workspaceRevision;
+      this.catalogDirty ||= this.catalog?.revision !== result.peopleRevision;
+      this.revision = result.workspaceRevision;
+      if (pending.kind === "project") {
+        this.dirtyProjects.add(pending.body.projectId);
+        if (result.revision !== pending.body.expectedRevision) {
           const links = this.ownRevisions.get(pending.body.projectId) ?? new Map<number, number>();
           links.set(pending.body.expectedRevision, result.revision);
           this.ownRevisions.set(pending.body.projectId, links);
         }
       }
       this.pending = null;
-      const remaining = pending.kind === "view" ? this.drafts : Object.fromEntries(Object.entries(this.drafts).filter(([key, value]) => drafts[key] !== value));
+      const remaining = Object.fromEntries(Object.entries(this.drafts).filter(([key, value]) => drafts[key] !== value));
       this.drafts = remaining;
       this.update({ pending: false, sending: false, message: "", intent: "", drafts: remaining });
-      this.persist();
+      try { this.persist(); }
+      catch { this.update({ message: "Сервер подтвердил изменение, но очистить черновик вкладки не удалось. Повтор после F5 использует прежний commandId." }); }
       return projectId;
     } catch (e) {
+      this.metadataDirty = true;
       this.update({ sending: false, message: e instanceof Error ? e.message : "Запись не подтверждена; правка сохранена.",
         conflict: e instanceof ApiError && e.code === "REVISION_CONFLICT", authRequired: e instanceof ApiError && e.status === 401 });
       throw e;
@@ -139,7 +149,7 @@ export class RemoteCommandService implements UIService, ServerRecovery {
   }
   private mutate(pending: Pending) {
     if (this.pending || this.state.pending) throw Error("Сначала разрешите неподтверждённую правку. Новая команда не отправлена.");
-    return this.send(pendingSchema.parse(pending));
+    return this.send(pending);
   }
   retry = () => this.pending ? this.send(this.pending) : Promise.resolve(null);
   reapply = async () => {
@@ -156,11 +166,13 @@ export class RemoteCommandService implements UIService, ServerRecovery {
       } else if (old.kind === "people") {
         const c = z.object({ revision: z.number().int().nonnegative() }).parse(await this.api("/api/v1/people"));
         next = { ...old, body: { ...old.body, commandId: crypto.randomUUID(), expectedRevision: c.revision } };
-      } else if (old.kind === "create" || old.kind === "workspace") {
+      } else {
         if (old.kind === "workspace" && old.body.command.type === "DuplicateProject") throw Error("Для копирования повторите действие после сверки проекта");
         const w = workspaceSchema.parse(await this.api("/api/v1/workspaces/current"));
-        next = pendingSchema.parse({ ...old, body: { ...old.body, commandId: crypto.randomUUID(), expectedRevision: w.workspace.revision } });
-      } else throw Error("Сверьте настройки представления");
+        next = old.kind === "create"
+          ? { ...old, body: { ...old.body, commandId: crypto.randomUUID(), expectedRevision: w.workspace.revision } }
+          : { ...old, body: { ...old.body, commandId: crypto.randomUUID(), expectedRevision: w.workspace.revision } };
+      }
       this.ownRevisions.clear();
       this.update({ sending: false });
       return await this.send(next);
@@ -169,16 +181,43 @@ export class RemoteCommandService implements UIService, ServerRecovery {
       throw e;
     }
   };
-  async screen(id: string | null) {
-    const workspace = workspaceSchema.parse(await this.api("/api/v1/workspaces/current"));
-    const [list, rawCatalog, active] = await Promise.all([
-      this.list(), this.api("/api/v1/people"), id ? this.load(id) : Promise.resolve(null),
-    ]);
-    const catalog = catalogSchema.parse({ ...z.object({ workspaceId: z.literal(WORKSPACE_ID), revision: z.number(), people: z.array(z.unknown()), retiredAssignments: z.array(z.unknown()) }).parse(rawCatalog), version: 1, undo: [], redo: [] });
-    this.documents = list.projects; this.revision = list.revision;
-    if (workspace.workspace.id !== catalog.workspaceId) throw Error("Неверное рабочее пространство");
-    if (active && !this.pending) this.views[active.project.id] = active.viewPreferences;
-    return { documents: this.documents, active, preferences: this.preferences, views: { ...this.views }, catalog,
+  async screen(id: string | null, afterCommand = false) {
+    const key = `${id ?? ""}:${String(afterCommand)}`;
+    const pending = this.reads.get(key);
+    if (pending) return pending;
+    const read = this.readScreen(id, afterCommand);
+    this.reads.set(key, read);
+    try { return await read; } finally { this.reads.delete(key); }
+  }
+  private async readCatalog() {
+    return catalogSchema.parse({ ...z.object({ workspaceId: z.literal(WORKSPACE_ID), revision: z.number(), people: z.array(z.unknown()), retiredAssignments: z.array(z.unknown()) }).parse(await this.api("/api/v1/people")), version: 1, undo: [], redo: [] });
+  }
+  private async readScreen(id: string | null, afterCommand: boolean): ReturnType<UIService["screen"]> {
+    const generation = this.generation;
+    let active: Snapshot | null;
+    if (afterCommand && !this.metadataDirty && this.catalog) {
+      // ACK revisions identify what can have changed. No workspace/list fetch per field edit.
+      const ids = new Set([...this.dirtyProjects, ...(id ? [id] : [])]);
+      const [docs, catalog] = await Promise.all([
+        Promise.all([...ids].map((key) => this.load(key))), this.catalogDirty ? this.readCatalog() : Promise.resolve(this.catalog),
+      ]);
+      this.documents = this.documents.map((summary) => {
+        const updated = docs.find((d) => d?.project.id === summary.project.id);
+        return updated ? { project: updated.project } : summary;
+      });
+      this.catalog = catalog; active = docs.find((d) => d?.project.id === id) ?? null;
+    } else {
+      const [rawWorkspace, list, catalog, detail] = await Promise.all([
+        this.api("/api/v1/workspaces/current"), this.list(), this.readCatalog(), id ? this.load(id) : Promise.resolve(null),
+      ]);
+      workspaceSchema.parse(rawWorkspace);
+      this.documents = list.projects; this.revision = list.revision; this.catalog = catalog; active = detail;
+    }
+    if (generation !== this.generation) { this.metadataDirty = true; return this.readScreen(id, false); }
+    this.dirtyProjects.clear(); this.metadataDirty = false; this.catalogDirty = false;
+    this.preferences = this.presentation.workspace();
+    const views: Record<string, ViewPreferences> = active ? { [active.project.id]: this.presentation.view(active) } : {};
+    return { documents: this.documents, active, preferences: this.preferences, views, catalog: this.catalog,
       portfolio: { ...emptyPortfolio(), revision: this.revision, order: this.documents.map((d) => d.project.id) }, historyIssues: [] };
   }
   private async list() {
@@ -209,9 +248,9 @@ export class RemoteCommandService implements UIService, ServerRecovery {
     return this.execute({ ...input, expectedRevision: revision });
   }
   async projectCommand(id: string, command: ContentCommand, revision?: number, local = false) {
-    const d = await this.load(id);
-    if (!d) throw Error("Проект не найден");
-    const e = { ...this.envelope(d, command), expectedRevision: revision ?? d.project.revision };
+    const project = this.documents.find((d) => d.project.id === id)?.project ?? (await this.load(id))?.project;
+    if (!project) throw Error("Проект не найден");
+    const e = envelopeSchema.parse({ ...this.base(revision ?? project.revision), projectId: id, command });
     return local ? this.executeLocal(e) : this.execute(e);
   }
   async create(input: Parameters<UIService["create"]>[0]) {
@@ -233,11 +272,11 @@ export class RemoteCommandService implements UIService, ServerRecovery {
   history() { return { canUndo: false, canRedo: false }; }
   undo(): Promise<void> { return Promise.reject(Error("Серверный Undo/Redo пока не поддерживается")); }
   peopleUndo(): Promise<void> { return this.undo(); }
-  async saveView(projectId: ProjectId, value: ViewPreferences) { await this.mutate({ kind: "view", projectId, body: viewSchema.parse({ workspaceId: WORKSPACE_ID, value }) }); }
-  savePreferences(value: WorkspacePreferences) { this.preferences = workspacePreferencesSchema.parse(value); return Promise.resolve(); }
+  saveView(projectId: ProjectId, value: ViewPreferences) { this.presentation.saveView(projectId, value); return Promise.resolve(); }
+  savePreferences(value: WorkspacePreferences) { this.presentation.saveWorkspace(value); this.preferences = value; return Promise.resolve(); }
   async exportBackup() {
     const [list, rawCatalog] = await Promise.all([this.list(), this.api("/api/v1/people")]);
-    const documents = await Promise.all(list.projects.map((d) => this.load(d.project.id)));
+    const documents = (await Promise.all(list.projects.map((d) => this.load(d.project.id)))).map((d) => d ? { ...d, viewPreferences: this.presentation.view(d) } : null);
     if (documents.some((d) => !d)) throw Error("Проект изменился во время экспорта. Повторите экспорт.");
     const catalog = catalogSchema.parse({ ...z.object({ workspaceId: z.string(), revision: z.number(), people: z.array(z.unknown()), retiredAssignments: z.array(z.unknown()) }).parse(rawCatalog), version: 1, undo: [], redo: [] });
     return JSON.stringify(v2BackupSchema.parse({ format: "timeline-backup", version: 2, exportedAt: new Date().toISOString(), documents, catalog: { people: catalog.people, retiredAssignments: catalog.retiredAssignments }, portfolioOrder: list.projects.map((d) => d.project.id), preferences: this.preferences }), null, 2);
