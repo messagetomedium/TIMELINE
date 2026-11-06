@@ -78,7 +78,7 @@ test("trackpad: diagonal pan, anchored pinch including result gaps, coalescing a
         firstChange,
         new Promise<never>((_, reject) => { setTimeout(() => { reject(Error("Batched pan produced no camera update")); }, 3000); }),
       ]);
-      await new Promise<void>(resolve => { requestAnimationFrame(() => { requestAnimationFrame(() => resolve()); }); });
+      await new Promise<void>(resolve => { requestAnimationFrame(() => { requestAnimationFrame(() => { resolve(); }); }); });
       return count;
     } finally { observer.disconnect(); }
   });
