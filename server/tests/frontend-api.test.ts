@@ -173,8 +173,11 @@ describe("V2.0A browser with real PostgreSQL", () => {
         page.on("request", (r) => { if (r.url().includes("/api/v1/")) requestsA.push(`${r.method()} ${r.url()}`); });
         bob.on("request", (r) => { if (r.url().includes("/api/v1/")) requestsB.push(`${r.method()} ${r.url()}`); });
         for (const target of [page, bob]) {
-          await target.getByRole("button", { name: "Увеличить масштаб", exact: true }).click();
-          await target.getByRole("button", { name: "Уменьшить масштаб", exact: true }).click();
+          await target.locator('.calendar-time').evaluate(el => {
+            const r = el.getBoundingClientRect();
+            for (const deltaY of [-12, 12]) el.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, ctrlKey: true, deltaY, clientX: r.left + 100, clientY: r.top + 10 }));
+            el.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaX: 7, deltaY: 20, clientX: r.left + 100, clientY: r.top + 10 }));
+          });
         }
         await page.getByLabel("Шаг", { exact: true }).selectOption("1d"); await bob.getByLabel("Шаг", { exact: true }).selectOption("1w");
         await page.getByRole("button", { name: "Выходные", exact: true }).click();
@@ -379,6 +382,19 @@ describe("V2.0A browser with real PostgreSQL", () => {
         if (!bounds) throw Error("Missing read-only guest bar");
         await guest.mouse.move(bounds.x + 8, bounds.y + 8); await guest.mouse.down(); await guest.mouse.move(bounds.x + 80, bounds.y + 8); await guest.mouse.up();
         await browserExpect(bar).toHaveAttribute("data-start", "2026-11-02"); expect(writes).toEqual([]);
+        const initialZoom = Number(await timeline.getAttribute("data-px-per-day")), initialPan = Number(await timeline.getAttribute("data-pan-x"));
+        await timeline.locator('.calendar-time').evaluate(el => {
+          const r = el.getBoundingClientRect();
+          el.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaX: 35, deltaY: 20, clientX: r.left + 100, clientY: r.top + 10 }));
+          el.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, ctrlKey: true, deltaY: -12, clientX: r.left + 100, clientY: r.top + 10 }));
+        });
+        await browserExpect.poll(async () => Number(await timeline.getAttribute("data-px-per-day"))).toBeGreaterThan(initialZoom);
+        expect(Number(await timeline.getAttribute("data-pan-x"))).not.toBe(initialPan);
+        await guest.waitForTimeout(200);
+        const guestCamera = await timeline.evaluate(el => ({ zoom: el.getAttribute("data-px-per-day"), pan: el.getAttribute("data-pan-x"), y: el.scrollTop }));
+        await guest.reload(); await browserExpect(view.getByRole("heading", { name: "Процесс 1", exact: true })).toBeVisible();
+        expect(await timeline.evaluate(el => ({ zoom: el.getAttribute("data-px-per-day"), pan: el.getAttribute("data-pan-x"), y: el.scrollTop }))).toEqual(guestCamera);
+        expect(writes).toEqual([]); expect((await read(id)).project.revision).toBe(2);
         expect(new URL(guest.url()).hash).toBe(""); expect(seen.join(" ")).not.toContain(token);
         expect(await guest.evaluate((raw) => JSON.stringify(sessionStorage).includes(raw) || JSON.stringify(localStorage).includes(raw), token)).toBe(false);
         expect(await view.textContent()).not.toMatch(/PrivatePersonFixture|private-contact-fixture|private-note-fixture|PrivateRoleFixture/);

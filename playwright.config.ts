@@ -12,7 +12,7 @@ export default defineConfig({
   },
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'], launchOptions: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH } : {} } },
-    { name: 'webkit', testMatch: '**/portfolio.spec.ts', use: { ...devices['Desktop Safari'] } },
+    { name: 'webkit', testMatch: ['**/portfolio.spec.ts', '**/trackpad.spec.ts'], use: { ...devices['Desktop Safari'] } },
   ],
   webServer: {
     command: 'npm run preview -- --host 127.0.0.1 --port 4173 --strictPort',

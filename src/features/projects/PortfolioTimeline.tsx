@@ -10,6 +10,7 @@ import { shiftProject } from '../../application/workspace/projectOperations';
 import type { PortfolioPreferences } from '../../application/workspace/model';
 import { CalendarRuler, TimeGrid } from '../timeline/CalendarLayers';
 import { useLocalToday } from '../timeline/useLocalToday';
+import { useCanvasNavigation } from '../timeline/useCanvasNavigation';
 import { formatDate } from './formatDate';
 import { ProjectActions } from './ProjectActions';
 import type { ProjectActionProps } from './ProjectActions';
@@ -47,7 +48,12 @@ export function PortfolioTimeline({ documents, preferences, onPreferences, onOpe
   const [previewCamera, setPreviewCamera] = useState<TimelineCamera | null>(null);
   const [previewDocument, setPreviewDocument] = useState<ProjectDocument | null>(null);
   const [hint, setHint] = useState('');
-  const camera = previewCamera ?? preferences.camera ?? cameraForFocusDate({ originDate: focus, pxPerDay: WORK_ZOOM, panX: 0 }, focus, width, 0.32);
+  const [localCamera, setLocalCamera] = useState<{ source: TimelineCamera | null; value: TimelineCamera } | null>(null);
+  const camera = previewCamera ?? (localCamera?.source === preferences.camera ? localCamera.value : null) ?? preferences.camera ?? cameraForFocusDate({ originDate: focus, pxPerDay: WORK_ZOOM, panX: 0 }, focus, width, 0.32);
+  const navigateCamera = (value: TimelineCamera) => { setLocalCamera({ source: preferences.camera, value }); };
+  const navigation = useCanvasNavigation({ surface, viewport, body, camera, setCamera: navigateCamera,
+    blocked: () => gesture.current !== null || rowDrag.current !== null, startPan: e => { begin(e, null); },
+    onIdle: (next, cameraY) => { if (next !== preferences.camera || cameraY !== (preferences.cameraY ?? 0)) onPreferences({ ...preferences, camera: next, cameraY }); } });
   const calendar = getCalendarGeometry(getVisibleDateRange(width, camera), preferences.step);
   const height = Math.max(360, documents.length * 64 + 64);
 
@@ -59,7 +65,11 @@ export function PortfolioTimeline({ documents, preferences, onPreferences, onOpe
       setWidth(entry.contentRect.width);
       if (!initialized.current) {
         initialized.current = true;
-        if (!preferences.camera) onPreferences({ ...preferences, camera: cameraForFocusDate({ originDate: focus, pxPerDay: WORK_ZOOM, panX: 0 }, focus, entry.contentRect.width, 0.32) });
+        if (!preferences.camera) {
+          const next = cameraForFocusDate({ originDate: focus, pxPerDay: WORK_ZOOM, panX: 0 }, focus, entry.contentRect.width, 0.32);
+          setLocalCamera({ source: preferences.camera, value: next }); onPreferences({ ...preferences, camera: next });
+        }
+        if (body.current) body.current.scrollTop = preferences.cameraY ?? 0;
       }
     });
     observer.observe(element);
@@ -127,12 +137,12 @@ export function PortfolioTimeline({ documents, preferences, onPreferences, onOpe
     if (!current || current.pointerId !== event.pointerId) return;
     gesture.current = null;
     if (current.document && current.delta !== 0) onShift(current.document.project.id, current.delta, current.document.project.revision);
-    else if (current.cameraPreview) onPreferences({ ...preferences, camera: current.cameraPreview });
+    else if (current.cameraPreview) setCamera(current.cameraPreview);
     cancel();
     if (surface.current?.hasPointerCapture(event.pointerId)) surface.current.releasePointerCapture(event.pointerId);
   };
-  const setCamera = (next: TimelineCamera) => { onPreferences({ ...preferences, camera: next }); };
-  return <section className="portfolio timeline-surface" aria-label="Общий таймлайн проектов" ref={surface} data-px-per-day={camera.pxPerDay} data-pan-x={camera.panX}
+  const setCamera = (next: TimelineCamera) => { navigateCamera(next); onPreferences({ ...preferences, camera: next, cameraY: body.current?.scrollTop ?? 0 }); };
+  return <section className={`portfolio timeline-surface${navigation.active ? ' gesture-pan' : ''}`} aria-label="Общий таймлайн проектов" ref={surface} data-px-per-day={camera.pxPerDay} data-pan-x={camera.panX} onPointerDownCapture={navigation.onPointerDownCapture}
     onPointerDown={(event) => { const target = event.target; if (event.button === 1 || (event.button === 0 && target instanceof Element && !target.closest('[data-interactive]'))) begin(event, null); }}
     onPointerMove={onPointerMove} onPointerUp={finish} onPointerCancel={cancel} onLostPointerCapture={cancel}>
     <div className="calendar-row"><div className="calendar-gutter section-gutter" data-interactive><strong>Название проекта</strong><span>{visibleYears(calendar.range)}</span></div><div className="calendar-time" ref={viewport}><CalendarRuler camera={camera} width={width} calendar={calendar} today={today} /></div></div>

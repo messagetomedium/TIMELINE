@@ -7,6 +7,7 @@ import type { ViewPreferences, ProjectId } from '../../domain';
 export const portfolioSchema = z.strictObject({
   camera: z.strictObject({ originDate: dateOnlySchema, pxPerDay: z.number().positive().max(48), panX: z.number() }).nullable(),
   step: gridStepSchema, showWeekends: z.boolean(), showInactive: z.boolean().optional(),
+  cameraY: z.number().nonnegative().optional(),
 });
 export const workspacePreferencesSchema = z.strictObject({
   version: z.literal(1), inspectorCollapsed: z.boolean().optional(), mode: z.enum(['cards', 'timeline']), portfolio: portfolioSchema,
