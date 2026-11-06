@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent } from 'react';
 import { addDays, daysBetween, gridStepSchema } from '../../domain';
 import type { ProjectDocument, ProjectId } from '../../domain';
@@ -41,6 +41,9 @@ export function PortfolioTimeline({ documents, preferences, onPreferences, onOpe
   const viewport = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLDivElement>(null);
   const initialized = useRef(false);
+  const scrollRestored = useRef(false);
+  const [viewReady, setViewReady] = useState(false);
+  const [initialCameraY] = useState(() => preferences.cameraY ?? 0);
   const gesture = useRef<Gesture | null>(null);
   const bodyDown = useRef<{ x: number; y: number } | null>(null);
   const suppressOpen = useRef(false);
@@ -69,12 +72,22 @@ export function PortfolioTimeline({ documents, preferences, onPreferences, onOpe
           const next = cameraForFocusDate({ originDate: focus, pxPerDay: WORK_ZOOM, panX: 0 }, focus, entry.contentRect.width, 0.32);
           setLocalCamera({ source: preferences.camera, value: next }); onPreferences({ ...preferences, camera: next });
         }
-        if (body.current) body.current.scrollTop = preferences.cameraY ?? 0;
+        // First commit the measured width, then restore scroll after layout.
+        setViewReady(true);
       }
     });
     observer.observe(element);
     return () => { observer.disconnect(); };
   }, [focus, preferences, onPreferences]);
+  useLayoutEffect(() => {
+    if (!viewReady || scrollRestored.current) return;
+    const element = body.current;
+    if (!element) return;
+    // Safari may clamp scrollTop to zero before the portfolio's flex layout is ready.
+    // Apply the initial local view once, after the measurement-triggered React commit.
+    scrollRestored.current = true;
+    if (element.scrollTop === 0) element.scrollTop = initialCameraY;
+  }, [viewReady, initialCameraY]);
 
   const cancel = useCallback(() => {
     const orderGesture = rowDrag.current;
