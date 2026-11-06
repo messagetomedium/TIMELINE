@@ -35,7 +35,6 @@ jobs:
     # Avoid slow apt downloads on ephemeral runners (previous install-deps timed out).
     container:
       image: mcr.microsoft.com/playwright:v1.64.1-noble
-      options: --user 1001
     steps:
       - uses: actions/checkout@v4
         with:
