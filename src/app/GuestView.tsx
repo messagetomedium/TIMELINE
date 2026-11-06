@@ -3,7 +3,7 @@ import { z } from "zod";
 import { guestProjectSchema } from "../application/v2/accessContracts";
 import { requestApi } from "../infrastructure/remote/ApiClient";
 import { DateRange } from "../features/projects/DateRange";
-import { formatDate } from "../features/projects/formatDate";
+import { GuestTimeline } from "./GuestTimeline";
 
 type GuestProject = z.infer<typeof guestProjectSchema>;
 /** Only the existing sanitized guest DTO enters this view; no editor/service/catalog. */
@@ -42,15 +42,7 @@ export function GuestView({ token }: { token: string | null }) {
     <main className="project-overview guest-project" aria-label="Гостевой проект" aria-busy={busy}>
       {error && <p role="alert">{error}</p>}{busy && !value && <p role="status">Открываем гостевой проект…</p>}
       {value && <><div className="page-heading"><span className="eyebrow">Только просмотр</span><h1>{value.project.name}</h1><DateRange value={value.project} /><p className="muted">Один проект. Доступ может быть отозван командой; гостевой сеанс действует один час.</p></div>
-        {[...value.stages].sort((a, b) => a.sortIndex - b.sortIndex).map((stage) => <section className="project-card" key={stage.id}>
-          <h2>{stage.title}</h2><DateRange value={stage} />
-          {value.processes.filter((p) => p.stageId === stage.id).map((process) => <section key={process.id}>
-            <h3>{process.title}</h3><p><DateRange value={process} /> · {process.isActive ? process.status : "Неактивная работа"}</p>
-            <ul>{value.tasks.filter((t) => t.processId === process.id).map((task) => <li key={task.id}><strong>{task.title}</strong> · <DateRange value={task} /> · {task.isActive && process.isActive ? task.status : "Неактивная работа"}</li>)}</ul>
-          </section>)}
-          {value.results.some((r) => r.stageId === stage.id) && <section><h3>Результаты</h3><ul>{value.results.filter((r) => r.stageId === stage.id).map((r) => <li key={r.id}>{r.title}</li>)}</ul></section>}
-        </section>)}
-        <section className="project-card"><h2>Чекпойнты</h2>{!value.checkpoints.length && <p>Чекпойнтов пока нет.</p>}<ul>{value.checkpoints.map((c) => <li key={c.id}>{c.title} · <time dateTime={c.date}>{formatDate(c.date)}</time></li>)}</ul></section>
+        <GuestTimeline value={value} />
       </>}
     </main></div>;
 }

@@ -220,6 +220,34 @@ describe("V2.0A browser with real PostgreSQL", () => {
         await browserExpect(view.getByRole("heading", { name: "Этап 1", exact: true })).toBeVisible();
         await browserExpect(view.getByRole("heading", { name: "Процесс 1", exact: true })).toBeVisible();
         await browserExpect(view).toContainText("Задача 1"); await browserExpect(view).toContainText("Гостевой результат"); await browserExpect(view).toContainText("Дедлайн");
+        const timeline = view.getByLabel("Календарный таймлайн проекта", { exact: true });
+        await browserExpect(timeline.getByLabel("Календарная шкала", { exact: true })).toBeVisible();
+        await browserExpect(timeline.locator('.calendar-month').filter({ hasText: "Ноябрь" }).first()).toBeVisible();
+        expect(await timeline.locator('.calendar-cell[data-labelled="true"]').count()).toBeGreaterThan(0);
+        const layout = await timeline.evaluate((el) => {
+          const bar = el.querySelector<HTMLElement>('.process-bar'), stage = el.querySelector<HTMLElement>('.stage-region');
+          if (!bar || !stage) throw Error("Missing dated guest scene");
+          const start = bar.dataset.start, end = bar.dataset.end;
+          const grid = el.querySelector<SVGLineElement>(`.calendar-column-line[data-date="${start ?? ""}"]`);
+          const result = el.querySelector<HTMLElement>('.result-tile'), gap = el.querySelector<HTMLElement>('.result-calendar-gap');
+          const gapStart = gap?.getBoundingClientRect().left ?? 0, gapEnd = gap?.getBoundingClientRect().right ?? 0;
+          const calendarInsideGap = [...el.querySelectorAll<HTMLElement>('.calendar-cell')].some((cell) => {
+            const rect = cell.getBoundingClientRect(); return rect.left < gapEnd - 1 && rect.right > gapStart + 1;
+          });
+          return { start, end, barX: bar.getBoundingClientRect().left, stageX: stage.getBoundingClientRect().left,
+            gridX: grid?.getBoundingClientRect().left, barWidth: bar.getBoundingClientRect().width,
+            resultInsideGap: !!result && result.getBoundingClientRect().left >= gapStart && result.getBoundingClientRect().right <= gapEnd,
+            calendarInsideGap };
+        });
+        expect(layout.start).toBe("2026-11-02"); expect(layout.end).toBe("2026-11-06");
+        expect(layout.gridX).toBeDefined(); expect(Math.abs(layout.barX - (layout.gridX ?? 0))).toBeLessThan(2);
+        expect(Math.abs(layout.barX - layout.stageX)).toBeLessThan(2); expect(layout.barWidth).toBeGreaterThan(10);
+        expect(layout.resultInsideGap).toBe(true); expect(layout.calendarInsideGap).toBe(false);
+        const writes: string[] = []; guest.on("request", (r) => { if (!["GET", "HEAD"].includes(r.method())) writes.push(r.url()); });
+        const bar = timeline.locator('.process-bar').first(); await bar.dblclick(); const bounds = await bar.boundingBox();
+        if (!bounds) throw Error("Missing read-only guest bar");
+        await guest.mouse.move(bounds.x + 8, bounds.y + 8); await guest.mouse.down(); await guest.mouse.move(bounds.x + 80, bounds.y + 8); await guest.mouse.up();
+        await browserExpect(bar).toHaveAttribute("data-start", "2026-11-02"); expect(writes).toEqual([]);
         expect(new URL(guest.url()).hash).toBe(""); expect(seen.join(" ")).not.toContain(token);
         expect(await guest.evaluate((raw) => JSON.stringify(sessionStorage).includes(raw) || JSON.stringify(localStorage).includes(raw), token)).toBe(false);
         expect(await view.textContent()).not.toMatch(/PrivatePersonFixture|private-contact-fixture|private-note-fixture|PrivateRoleFixture/);
