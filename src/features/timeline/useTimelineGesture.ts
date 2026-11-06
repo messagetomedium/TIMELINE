@@ -327,6 +327,7 @@ export function useTimelineGesture({
     active,
     command: gesture.current?.command ?? null,
     invalid,
+    isActive: () => gesture.current !== null,
     onPointerMove,
     onPointerUp: finish,
     onPointerCancel: cancel,
@@ -352,10 +353,10 @@ export function useTimelineGesture({
     startCheckpoint: (event: PointerEvent, id: string, date: DateOnly) => {
       begin(event, { kind: "checkpoint", id, date });
     },
-    startPan: (event: PointerEvent) => {
+    startPan: (event: PointerEvent, force = false) => {
       const target = event.target;
       if (
-        event.button === 1 ||
+        event.button === 1 || (force && event.button === 0) ||
         (event.button === 0 &&
           target instanceof Element &&
           !target.closest("[data-interactive]"))

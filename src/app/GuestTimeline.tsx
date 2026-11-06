@@ -2,11 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import type { z } from "zod";
 import type { guestProjectSchema } from "../application/v2/accessContracts";
+import { portfolioSchema } from "../application/workspace/model";
 import { addDays, dateOnly } from "../domain";
 import type { DateOnly } from "../domain";
 import { getCalendarGeometry, visibleYears } from "../domain/calendar";
 import { RESULT_COLUMN_WIDTH, xBefore } from "../domain/SegmentAxis";
 import { cameraForFitRange, getVisibleDateRange, widthForInterval, WORK_ZOOM, xForDate } from "../domain/timeline";
+import type { TimelineCamera } from "../domain/timeline";
+import { useCanvasNavigation } from "../features/timeline/useCanvasNavigation";
 import { CalendarRuler, TimeGrid } from "../features/timeline/CalendarLayers";
 import { DateRange } from "../features/projects/DateRange";
 import { formatDate } from "../features/projects/formatDate";
@@ -16,15 +19,22 @@ type GuestProject = z.infer<typeof guestProjectSchema>;
 type Row = { kind: "process" | "task"; work: GuestProject["processes"][number] | GuestProject["tasks"][number]; color: string; active: boolean }
   | { kind: "result"; result: GuestProject["results"][number]; boundary: DateOnly };
 const rowHeight = 48, gutter = 176;
+const savedViewSchema = portfolioSchema.pick({ camera: true, cameraY: true });
 
 /** Projection of the guest DTO only. No Snapshot, editor, assignments or command handlers. */
 export function GuestTimeline({ value }: { value: GuestProject }) {
-  const host = useRef<HTMLDivElement>(null), [viewport, setViewport] = useState(800);
+  const host = useRef<HTMLDivElement>(null), timeViewport = useRef<HTMLDivElement>(null), [viewport, setViewport] = useState(800);
+  const key = `timeline-guest-view-v1:${value.project.id}`;
+  const [savedView] = useState(() => {
+    try { return savedViewSchema.safeParse(JSON.parse(sessionStorage.getItem(key) ?? "null") as unknown).data; } catch { return undefined; }
+  });
+  const [localCamera, setCamera] = useState<TimelineCamera | null>(savedView?.camera ?? null);
   useEffect(() => {
     if (!host.current) return;
+    host.current.scrollTop = savedView?.cameraY ?? 0;
     const observer = new ResizeObserver(([entry]) => { if (entry) setViewport(Math.max(640, entry.contentRect.width - gutter)); });
     observer.observe(host.current); return () => { observer.disconnect(); };
-  }, []);
+  }, [savedView]);
   const stages = [...value.stages].sort((a, b) => a.sortIndex - b.sortIndex);
   const gaps = stages.filter((s) => value.results.some((r) => r.stageId === s.id)).map((s) => ({ stageId: s.id, boundary: s.endDateExclusive, width: RESULT_COLUMN_WIDTH }));
   const rows: Row[] = [];
@@ -41,13 +51,18 @@ export function GuestTimeline({ value }: { value: GuestProject }) {
     endDateExclusive: [value.project.endDateExclusive, ...works.map((w) => w.endDateExclusive), ...value.checkpoints.map((c) => addDays(c.date, 1))].sort().at(-1) ?? value.project.endDateExclusive,
   };
   const width = Math.max(viewport, gaps.length * RESULT_COLUMN_WIDTH + 480), height = Math.max(144, rows.length * rowHeight);
-  const camera = cameraForFitRange({ originDate: range.startDate, pxPerDay: WORK_ZOOM, panX: 0, gaps }, range, width);
+  const camera = { ...(localCamera ?? cameraForFitRange({ originDate: range.startDate, pxPerDay: WORK_ZOOM, panX: 0, gaps }, range, width)), gaps };
+  useCanvasNavigation({ surface: host, viewport: timeViewport, body: host, camera, setCamera,
+    onIdle: (next, cameraY) => {
+      // Only presentation, scoped to this guest tab/project; no access tokens or DTO are stored.
+      try { sessionStorage.setItem(key, JSON.stringify({ camera: { originDate: next.originDate, pxPerDay: next.pxPerDay, panX: next.panX }, cameraY })); } catch { /* Navigation remains available without storage. */ }
+    } });
   const calendar = getCalendarGeometry(getVisibleDateRange(width, camera), camera.pxPerDay >= 28 ? "1d" : camera.pxPerDay >= 7 ? "1w" : "1mo");
   const area = { project: value.project, checkpoints: value.checkpoints.map((c) => c.date) };
-  return <div ref={host} className="timeline-surface guest-timeline" aria-label="Календарный таймлайн проекта">
+  return <div ref={host} className="timeline-surface guest-timeline" aria-label="Календарный таймлайн проекта" data-px-per-day={camera.pxPerDay} data-pan-x={camera.panX}>
     <div style={{ width: width + gutter }}>
       <div className="calendar-row"><div className="section-gutter calendar-gutter">Календарь<span>{visibleYears(calendar.range)}</span></div>
-        <CalendarRuler camera={camera} width={width} calendar={calendar} today={dateOnly(new Date().toISOString().slice(0, 10))} area={area} /></div>
+        <div className="calendar-time" ref={timeViewport}><CalendarRuler camera={camera} width={width} calendar={calendar} today={dateOnly(new Date().toISOString().slice(0, 10))} area={area} /></div></div>
       <div className="stage-row"><div className="section-gutter stage-gutter">Этапы</div><div className="stage-band">
         {stages.map((stage, index) => <section className={`stage-region stage-color-${String(index % 4)}`} key={stage.id} data-start={stage.startDate} data-end={stage.endDateExclusive}
           style={{ left: xForDate(stage.startDate, camera), width: widthForInterval(stage, camera) }}><div className="stage-label-content"><h2 className="stage-name">{stage.title}</h2><span className="stage-date"><DateRange value={stage} /></span></div></section>)}

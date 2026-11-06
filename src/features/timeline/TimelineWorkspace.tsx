@@ -1,4 +1,5 @@
 import { useViewPersistence } from './useViewPersistence';
+import { useCanvasNavigation } from './useCanvasNavigation';
 import { effectiveActive } from "../../domain/v2/activity";
 import { DateRange } from "../projects/DateRange";
 import { barGeometry } from '../../domain/barGeometry';
@@ -95,6 +96,7 @@ export function TimelineWorkspace({ document, onCommit, initialView, onViewChang
   const [editingStage, setEditingStage] = useState<StageMarkerId | null>(null);
   const gesture = useTimelineGesture({ document, camera, step, surface, body, setCamera, onCommit, onError: setError, onStageClick: foundation?.onStageSelect ?? setEditingStage, evaluate: foundation?.evaluate, onCommand: foundation ? (command,revision)=>{if(command.type==='GroupMove'&&command.kind==='task'&&command.destination)setExpanded(old=>new Set([...old,processIdSchema.parse(command.destination?.parentId)]));foundation.onCommand(command,revision);} : undefined,
     stack:foundation?(d,drop)=>groupDrop(foundation.snapshot,d,foundation.layout,expanded,drop):undefined });
+  const navigation = useCanvasNavigation({ surface, viewport: timeViewport, body, camera, setCamera, blocked: gesture.isActive, startPan: e => { gesture.startPan(e, true); } });
   const sceneDocument = gesture.preview ?? document;
   const sceneExpanded=useMemo(()=>gesture.command?.type==='GroupMove'&&gesture.command.kind==='task'&&gesture.command.destination?new Set([...expanded,processIdSchema.parse(gesture.command.destination.parentId)]):expanded,[gesture.command,expanded]);
   const layout = useMemo(() => (foundation?.layout ?? layoutTimeline)(sceneDocument, sceneExpanded), [foundation?.layout, sceneDocument, sceneExpanded]);
@@ -113,7 +115,6 @@ export function TimelineWorkspace({ document, onCommit, initialView, onViewChang
       setWidth(entry.contentRect.width);
       if (!initialized.current) {
         if (!initialOptions.view) setCamera((previous) => cameraForFocusDate(previous, initialOptions.focus, entry.contentRect.width, 0.32, WORK_ZOOM));
-        if (body.current && initialOptions.view) body.current.scrollTop = initialOptions.view.cameraY;
         initialized.current = true;
         setViewReady(true);
       }
@@ -131,7 +132,7 @@ export function TimelineWorkspace({ document, onCommit, initialView, onViewChang
       showWeekends: weekends, showResults, expandedProcessIds: [...expanded].filter(id => validIds.has(id)), ...retainedView,
     };
   }, [document.project.id, document.project.startDate, processKeys, step, camera.originDate, camera.panX, camera.pxPerDay, weekends, showResults, expanded, retainedView]);
-  const onScroll = useViewPersistence(body, initialOptions.view?.cameraY ?? 0, persistedView, viewReady, !!gesture.active, onViewChange);
+  const onScroll = useViewPersistence(body, initialOptions.view?.cameraY ?? 0, persistedView, viewReady, !!gesture.active || navigation.active, onViewChange);
 
   const select = (target:Selection,modifiers?:{ctrlKey:boolean;metaKey:boolean;shiftKey:boolean}) => {
     if(foundation){try{const next=selectWork(foundation.snapshot,validMulti?.ids.length?validMulti:null,target.kind,target.id,modifiers?.shiftKey?'range':modifiers?.ctrlKey||modifiers?.metaKey?'toggle':'plain');setMulti(next);const id=next?.ids.includes(target.id)?target.id:next?.ids.at(-1);setSelection(id?(target.kind==='process'?{kind:'process',id:processIdSchema.parse(id)}:{kind:'task',id:taskIdSchema.parse(id)}):null);setError('');}catch(e){setError(e instanceof Error?e.message:'Выбор недоступен');return;}}
@@ -160,7 +161,7 @@ export function TimelineWorkspace({ document, onCommit, initialView, onViewChang
   const selectedItem = selection?.kind === 'process' ? sceneDocument.processes.find((item) => item.id === selection.id) : sceneDocument.tasks.find((item) => item.id === selection?.id);
   const activeProcess = selection?.kind === 'process' ? document.processes.find((item) => item.id === selection.id) : document.processes.find((item) => 'processId' in (selectedItem ?? {}) && selectedItem && 'processId' in selectedItem && item.id === selectedItem.processId) ?? document.processes[0];
   return <main className={`timeline-workspace ${foundation?.inspectorCollapsed?'inspector-collapsed':''}`} aria-label="Редактор таймлайна" data-project-revision={document.project.revision} data-px-per-day={camera.pxPerDay} data-pan-x={camera.panX}>
-    <div className={`timeline-surface ${gesture.active ? `gesture-${gesture.active}` : ''} ${gesture.invalid ? 'invalid-gesture' : ''}`} ref={surface}
+    <div className={`timeline-surface ${gesture.active ? `gesture-${gesture.active}` : navigation.active ? 'gesture-pan' : ''} ${gesture.invalid ? 'invalid-gesture' : ''}`} ref={surface} onPointerDownCapture={navigation.onPointerDownCapture}
       onPointerDown={gesture.startPan} onPointerMove={gesture.onPointerMove} onPointerUp={gesture.onPointerUp} onPointerCancel={gesture.onPointerCancel} onLostPointerCapture={gesture.onLostPointerCapture}>
       <header className="editor-heading" data-interactive>
         <div><p className="eyebrow">Рабочий проект</p><h1 title={document.project.name}>{document.project.name}</h1></div>
