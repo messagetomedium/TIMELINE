@@ -147,6 +147,7 @@ export async function createApp(config: Config, suppliedMailer?: Mailer) {
     });
   });
   const sensitive = { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } };
+  app.get("/api/v1/team", async (request) => members.list(await actor(request)));
   app.post("/api/v1/invitations", sensitive, async (request) => members.invite(await actor(request), inviteSchema.parse(request.body).email));
   app.post("/api/v1/invitations/accept", sensitive, async (request) => members.accept(await actor(request), tokenSchema.parse(request.body).token));
   app.delete("/api/v1/invitations/:id", sensitive, async (request) => { await members.revokeInvite(await actor(request), idParams.parse(request.params).id); return { revoked: true }; });
@@ -155,6 +156,10 @@ export async function createApp(config: Config, suppliedMailer?: Mailer) {
     const a = await actor(request), { id } = idParams.parse(request.params), { workspaceId } = querySchema.parse(request.query);
     const issued = await guests.issue(a, workspaceId, id);
     return { id: issued.id, url: `${config.APP_ORIGIN}/guest#${issued.token}` };
+  });
+  app.get("/api/v1/projects/:id/guest-links", async (request) => {
+    const a = await actor(request), { id } = idParams.parse(request.params), { workspaceId } = querySchema.parse(request.query);
+    return guests.list(a, workspaceId, id);
   });
   app.delete("/api/v1/guest-links/:id", sensitive, async (request) => {
     const a = await actor(request), { id } = idParams.parse(request.params), { workspaceId } = querySchema.parse(request.query);

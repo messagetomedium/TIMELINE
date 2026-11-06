@@ -2,21 +2,37 @@ import { useEffect, useMemo, useState } from "react";
 import { z } from "zod";
 import { FoundationApp } from "./FoundationApp";
 import { RemoteCommandService } from "../infrastructure/remote/RemoteCommandService";
-import { requestApi } from "../infrastructure/remote/ApiClient";
+import { ApiError, requestApi } from "../infrastructure/remote/ApiClient";
+import type { AccessLink } from "./accessLink";
+import { GuestView } from "./GuestView";
 
 const sessionSchema = z.object({ user: z.object({ id: z.string().min(1), email: z.email(), emailVerified: z.boolean() }) }).nullable();
 type User = NonNullable<z.infer<typeof sessionSchema>>["user"];
-export function ServerApp({ resetToken, verified }: { resetToken?: string; verified: boolean }) {
+type ServerProps = { resetToken?: string; verified: boolean; accessLink?: AccessLink };
+export function ServerApp(props: ServerProps) {
+  return props.accessLink?.kind === "guest" ? <GuestView token={props.accessLink.token} /> : <MemberApp {...props} />;
+}
+function MemberApp({ resetToken, verified, accessLink }: ServerProps) {
   const [user, setUser] = useState<User | null>(null), [loading, setLoading] = useState(true), [error, setError] = useState("");
+  const [member, setMember] = useState(false), [inviteToken, setInviteToken] = useState(accessLink?.token ?? null);
+  const [accepting, setAccepting] = useState(false), [inviteError, setInviteError] = useState("");
   const [loginOpen, setLoginOpen] = useState(false), [resetOpen, setResetOpen] = useState(!!resetToken);
   const load = async () => {
     setLoading(true); setError("");
-    try { setUser(sessionSchema.parse(await requestApi("/api/auth/get-session"))?.user ?? null); }
+    try {
+      const current = sessionSchema.parse(await requestApi("/api/auth/get-session"))?.user ?? null;
+      let allowed = false;
+      if (current?.emailVerified) {
+        try { await requestApi("/api/v1/workspaces/current"); allowed = true; }
+        catch (e) { if (!(e instanceof ApiError && e.status === 403 && e.code === "MEMBERSHIP_REQUIRED")) throw e; }
+      }
+      setUser(current); setMember(allowed);
+    }
     catch { setError("Не удалось проверить вход. Проверьте соединение с сервером."); }
     finally { setLoading(false); }
   };
   useEffect(() => { void Promise.resolve().then(load); }, []);
-  const userId = user?.emailVerified ? user.id : null;
+  const userId = user?.emailVerified && member ? user.id : null;
   const service = useMemo(() => userId ? new RemoteCommandService(userId) : null, [userId]);
   if (loading) return <main className="workspace-loading" role="status">Проверяем вход…</main>;
   if (error) return <main className="workspace-loading"><p role="alert">{error}</p><button onClick={() => { void load(); }}>Повторить подключение</button></main>;
@@ -26,13 +42,26 @@ export function ServerApp({ resetToken, verified }: { resetToken?: string; verif
     catch { setError("Не удалось выйти. Повторите подключение."); }
   };
   return <>
-    {service && user ? <FoundationApp key={user.id} service={service} server={{ recovery: service, email: user.email, onLogout: logout, onLogin: () => { setLoginOpen(true); } }} /> : null}
-    {(!service || loginOpen || resetOpen) && <AuthForm initial={resetOpen ? "reset" : "login"} resetToken={resetToken ?? ""} verified={verified} onSuccess={authenticated} onResetDone={() => { setResetOpen(false); }} />}
+    {inviteToken ? <main className="workspace-loading">
+      <h1>Приглашение в MEDIUM</h1><p>Доступ выдаётся только подтверждённому email получателя. Токен хранится в памяти этой вкладки; после обновления откройте исходную ссылку снова.</p>
+      {user?.emailVerified && <><p>{user.email}</p><button disabled={accepting} onClick={() => {
+        if (accepting) return; setAccepting(true); setInviteError("");
+        void requestApi("/api/v1/invitations/accept", "POST", { token: inviteToken }).then(async () => {
+          setInviteToken(null); history.replaceState(null, "", "/#/projects"); await load();
+        }).catch((e: unknown) => { setInviteError(e instanceof Error ? e.message : "Приглашение не принято."); }).finally(() => { setAccepting(false); });
+      }}>Принять приглашение</button><button disabled={accepting} onClick={() => { void logout(); }}>Выйти и сменить аккаунт</button></>}
+      {inviteError && <p role="alert">{inviteError}</p>}
+    </main> : service && user ? <FoundationApp key={user.id} service={service} server={{ recovery: service, email: user.email, onLogout: logout, onLogin: () => { setLoginOpen(true); } }} />
+      : user?.emailVerified ? <main className="workspace-loading"><h1>Ожидается приглашение</h1><p>{user.email} · Попросите администратора MEDIUM прислать приглашение. Проекты и каталог людей пока недоступны.</p>
+        <button onClick={() => { void load(); }}>Проверить доступ</button><button onClick={() => { void logout(); }}>Выйти</button>
+        {accessLink?.kind === "invite" && <p>Ссылка недоступна в этой вкладке. Откройте исходное приглашение ещё раз.</p>}
+      </main> : null}
+    {(!user?.emailVerified || loginOpen || resetOpen) && <AuthForm invitation={!!inviteToken} initial={resetOpen ? "reset" : "login"} resetToken={resetToken ?? ""} verified={verified} onSuccess={authenticated} onResetDone={() => { setResetOpen(false); }} />}
   </>;
 }
 function formText(data: FormData, key: string) { const value = data.get(key); return typeof value === "string" ? value : ""; }
-function AuthForm({ initial, resetToken, verified, onSuccess, onResetDone }: {
-  initial: "login" | "reset"; resetToken: string; verified: boolean; onSuccess: () => Promise<void>; onResetDone: () => void;
+function AuthForm({ initial, resetToken, verified, onSuccess, onResetDone, invitation }: {
+  initial: "login" | "reset"; resetToken: string; verified: boolean; onSuccess: () => Promise<void>; onResetDone: () => void; invitation: boolean;
 }) {
   const [mode, setMode] = useState<"login" | "register" | "forgot" | "reset">(initial);
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [notice, setNotice] = useState(verified ? "Email подтверждён. Войдите в аккаунт." : "");
@@ -67,6 +96,7 @@ function AuthForm({ initial, resetToken, verified, onSuccess, onResetDone }: {
   }}>
     <h1>{mode === "login" ? "Вход в TIMELINE" : mode === "register" ? "Регистрация" : mode === "forgot" ? "Восстановление доступа" : "Новый пароль"}</h1>
     <p className="inspector-note">Серверный режим · данные рабочего пространства в PostgreSQL. Локальные проекты браузера сохранены отдельно.</p>
+    {invitation && <p>Подтвердите email в другой вкладке, затем вернитесь сюда и войдите, чтобы принять приглашение. После обновления страницы откройте исходное приглашение снова.</p>}
     {notice && <p role="status">{notice}</p>}{error && <p className="workspace-error" role="alert">{error}</p>}
     {mode === "register" && <label>Имя<input name="name" autoComplete="name" required maxLength={200} disabled={busy} /></label>}
     {mode !== "reset" && <label>Email<input name="email" type="email" autoComplete="email" required value={email} onChange={(e) => { setEmail(e.target.value); }} disabled={busy} /></label>}

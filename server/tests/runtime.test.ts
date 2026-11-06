@@ -33,9 +33,19 @@ it("static frontend uses an explicit allowlist, same-origin policy and blocks fi
     await symlink(join(directory, "private.js"), join(root, "assets/leak.js"));
     await registerFrontend(app, root);
     const index = await app.inject("/"); expect(index.statusCode).toBe(200); expect(index.body).toContain('name="timeline-storage" content="server"'); expect(index.headers["content-security-policy"]).toContain("connect-src 'self'");
+    for (const path of ["/invite", "/guest"]) {
+      const linked = await app.inject(path); expect(linked.statusCode).toBe(200); expect(linked.body).toBe(index.body);
+      expect(linked.headers["content-security-policy"]).toBe(index.headers["content-security-policy"]);
+    }
     const asset = await app.inject("/assets/app-abcdefgh.js"); expect(asset.statusCode).toBe(200); expect(asset.headers["cache-control"]).toContain("immutable");
-    for (const path of ["/assets/leak.js", "/assets/%2e%2e/private.js", "/assets/%2e%2e%2fprivate.js", "/assets/file.map", "/api/missing", "/.env"]) expect((await app.inject(path)).statusCode).toBe(404);
+    for (const path of ["/assets/leak.js", "/assets/%2e%2e/private.js", "/assets/%2e%2e%2fprivate.js", "/assets/file.map", "/api/missing", "/.env", "/invite/token", "/guest/other"]) expect((await app.inject(path)).statusCode).toBe(404);
     expect((await app.inject({ method: "HEAD", url: "/" })).body).toBe("");
+    const local = Fastify();
+    try {
+      await registerFrontend(local, root, "local");
+      expect((await local.inject("/")).body).toContain('name="timeline-storage" content="local"');
+      for (const path of ["/invite", "/guest"]) expect((await local.inject(path)).statusCode).toBe(404);
+    } finally { await local.close(); }
   } finally { await app.close(); await rm(directory, { recursive: true }); }
 });
 

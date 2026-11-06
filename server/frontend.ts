@@ -17,7 +17,7 @@ export async function registerFrontend(app: FastifyInstance, directory: string, 
     try { pathname = decodeURIComponent((request.raw.url ?? "/").split("?")[0] ?? "/"); }
     catch { return reply.code(404).send({ error: "NOT_FOUND" }); }
     if (pathname.includes("\\") || pathname.includes("\0") || pathname.split("/").some((s) => s.startsWith("."))) return reply.code(404).send({ error: "NOT_FOUND" });
-    const name = pathname === "/" ? "index.html" : pathname.slice(1);
+    const name = ["/", "/invite", "/guest"].includes(pathname) ? "index.html" : pathname.slice(1);
     const type = types[extname(name)];
     if (!type || (extname(name) === ".html" && name !== "index.html")) return reply.code(404).send({ error: "NOT_FOUND" });
     let file: string;
@@ -36,6 +36,7 @@ export async function registerFrontend(app: FastifyInstance, directory: string, 
     return reply.send(createReadStream(file));
   }
   app.get("/", send);
+  if (mode === "server") { app.get("/invite", send); app.get("/guest", send); }
   app.get("/assets/*", send);
   app.get("/fonts/*", send);
   app.get("/favicon.svg", send);

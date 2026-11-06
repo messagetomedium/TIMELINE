@@ -9,6 +9,7 @@ import { hashPayload } from "./commands";
 import type { Config } from "./config";
 import type { Mailer } from "./mailer";
 import { ApiError } from "./errors";
+import { teamSchema } from "../src/application/v2/accessContracts";
 
 export const opaqueToken = () => randomBytes(32).toString("base64url");
 // Purpose is included so an invite can never be exchanged as a guest credential.
@@ -20,6 +21,20 @@ async function editorLimit(db: QueryDatabase, workspace: typeof t.workspaces.$in
 }
 export class Members {
   constructor(readonly db: Database, readonly config: Config, readonly mailer: Mailer) {}
+
+  async list(actor: Actor) {
+    return this.db.transaction(async (db) => {
+      const { workspace, member } = await lockAccess(db, actor, WORKSPACE_ID);
+      const members = await db.select({ id: t.user.id, name: t.user.name, email: t.user.email, role: t.memberships.role })
+        .from(t.memberships).innerJoin(t.user, eq(t.user.id, t.memberships.userId))
+        .where(and(eq(t.memberships.workspaceId, workspace.id), isNull(t.memberships.revokedAt))).orderBy(t.user.name, t.user.id);
+      const invitations = await db.select({ id: t.invitations.id, email: t.invitations.email, expiresAt: t.invitations.expiresAt, revokedAt: t.invitations.revokedAt, usedCount: t.invitations.usedCount })
+        .from(t.invitations).where(eq(t.invitations.workspaceId, workspace.id)).orderBy(t.invitations.expiresAt, t.invitations.id);
+      return teamSchema.parse({ role: member.role, limits: { editors: workspace.maxEditors, guests: workspace.maxGuests }, members,
+        invitations: invitations.map((i) => ({ id: i.id, email: i.email, expiresAt: i.expiresAt.toISOString(),
+          status: i.revokedAt ? "revoked" : i.usedCount ? "used" : i.expiresAt <= new Date() ? "expired" : "pending" })) });
+    });
+  }
 
   async invite(actor: Actor, email: string) {
     const token = opaqueToken(), id = randomUUID(), expiresAt = new Date(Date.now() + 7 * 86_400_000);

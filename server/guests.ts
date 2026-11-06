@@ -9,9 +9,19 @@ import { guestProjectSchema } from "./dto";
 import { PostgresRepository } from "./db/repository";
 import { checkpointDate } from "../src/domain/v2/model";
 import { ApiError, requireValue } from "./errors";
+import { guestLinksSchema } from "../src/application/v2/accessContracts";
 
 export class Guests {
   constructor(readonly db: Database) {}
+  async list(actor: Actor, workspaceId: string, projectId: string) {
+    return this.db.transaction(async (db) => {
+      await lockAccess(db, actor, workspaceId);
+      await lockProject(db, workspaceId, projectId);
+      const links = await db.select({ id: t.guestLinks.id, projectId: t.guestLinks.projectId, permissions: t.guestLinks.permissions, revokedAt: t.guestLinks.revokedAt })
+        .from(t.guestLinks).where(and(eq(t.guestLinks.workspaceId, workspaceId), eq(t.guestLinks.projectId, projectId))).orderBy(t.guestLinks.id);
+      return guestLinksSchema.parse({ links: links.map(({ revokedAt, ...link }) => ({ ...link, status: revokedAt ? "revoked" : "active" })) });
+    });
+  }
   async issue(actor: Actor, workspaceId: string, projectId: string) {
     const token = opaqueToken(), id = randomUUID();
     await this.db.transaction(async (db) => {

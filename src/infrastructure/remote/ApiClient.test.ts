@@ -4,6 +4,15 @@ import { RemoteCommandService } from "./RemoteCommandService";
 import { createTemplate } from "../../domain/v2/template";
 import { dateOnly } from "../../domain";
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+it("bodyless access POST/DELETE do not advertise an empty JSON document", async () => {
+  const calls: RequestInit[] = [];
+  vi.stubGlobal("fetch", vi.fn((_path: string, options: RequestInit) => {
+    calls.push(options); return Promise.resolve(new Response('{"ok":true}', { status: 200, headers: { "Content-Type": "application/json" } }));
+  }));
+  await requestApi("/api/v1/projects/example/guest-links", "POST"); await requestApi("/api/v1/members/example", "DELETE");
+  expect(calls.map((c) => c.method)).toEqual(["POST", "DELETE"]);
+  for (const call of calls) { expect(call.body).toBeUndefined(); expect(new Headers(call.headers).has("Content-Type")).toBe(false); }
+});
 it("aborts a stalled content request, ends sending and keeps its exact id for retry", async () => {
   vi.useFakeTimers();
   const bodies: string[] = [];

@@ -119,6 +119,132 @@ describe("V2.0A browser with real PostgreSQL", () => {
     { await admin.query(`drop owned by ${escapeIdentifier(role)}`); await admin.query(`drop role ${escapeIdentifier(role)}`); await admin.end(); }
   });
   for (const engine of ["chromium", "webkit"] as const) {
+    it(`V2.1A ${engine}: invitation registration, verification, two admins, conflict and membership revocation`, async () => {
+      const extra = engine === "webkit" ? await webkit.launch({ headless: true }) : null;
+      const engineBrowser = extra ?? browser;
+      if (extra) { await context.close(); context = await extra.newContext({ viewport: { width: 1440, height: 900 } }); page = await context.newPage(); }
+      const other = await engineBrowser.newContext({ viewport: { width: 1440, height: 900 } }), invited = await other.newPage();
+      const invitee = "invited-browser@example.test";
+      try {
+        await registerOwner(); const id = await createProject();
+        await page.getByRole("button", { name: "Команда и доступ", exact: true }).click();
+        const team = page.getByRole("dialog", { name: "Команда и доступ", exact: true });
+        await browserExpect(team).toContainText("Владелец (owner)");
+        await team.getByLabel("Email администратора").fill(invitee);
+        await team.getByRole("button", { name: "Пригласить администратора", exact: true }).click();
+        await browserExpect(team).toContainText("Ожидает принятия");
+        const invitation = mailer.messages.findLast((m) => m.to === invitee && m.subject.includes("приглашение"))?.text;
+        if (!invitation) throw Error("Missing fixture invitation");
+        const secret = new URL(invitation).hash.slice(1), seen: string[] = [];
+        invited.on("request", (r) => { seen.push(r.url(), r.headers().referer ?? ""); });
+        expect((await invited.goto(invitation))?.status()).toBe(200);
+        await browserExpect(invited.getByRole("heading", { name: "Вход в TIMELINE", exact: true })).toBeVisible();
+        expect(new URL(invited.url()).hash).toBe(""); expect(new URL(invited.url()).pathname).toBe("/invite");
+        await invited.getByRole("button", { name: "Создать аккаунт", exact: true }).click();
+        await invited.getByLabel("Имя", { exact: true }).fill("Приглашённый администратор");
+        await invited.getByLabel("Email", { exact: true }).fill(invitee); await invited.getByLabel("Пароль", { exact: true }).fill(password);
+        await invited.getByRole("button", { name: "Зарегистрироваться", exact: true }).click();
+        await browserExpect(invited.getByRole("status")).toContainText("Запрос подтверждения принят");
+        await invited.getByLabel("Email", { exact: true }).fill(invitee); await invited.getByLabel("Пароль", { exact: true }).fill(password);
+        await invited.getByRole("button", { name: "Войти", exact: true }).click();
+        await browserExpect(invited.getByRole("alert")).toContainText("подтверждение email");
+        const verify = mailer.messages.findLast((m) => m.to === invitee && m.subject.includes("подтверждение"))?.text;
+        if (!verify) throw Error("Missing fixture verification");
+        const verification = await other.newPage(); await verification.goto(verify);
+        await browserExpect(verification.getByRole("status")).toContainText("Email подтверждён"); await verification.close();
+        await invited.getByLabel("Пароль", { exact: true }).fill(password); await invited.getByRole("button", { name: "Войти", exact: true }).click();
+        await invited.getByRole("button", { name: "Принять приглашение", exact: true }).click();
+        await browserExpect(invited.getByRole("heading", { name: "Проекты", exact: true })).toBeVisible();
+        expect(seen.join(" ")).not.toContain(secret);
+        expect(await invited.evaluate((token) => JSON.stringify(sessionStorage).includes(token) || JSON.stringify(localStorage).includes(token), secret)).toBe(false);
+        expect((await admin.query("select id from people")).rowCount).toBe(0); // User never auto-creates a Person.
+        await invited.goto(`${origin}/#/projects/${id}`);
+        await browserExpect(invited.getByRole("status", { name: "Состояние хранения" })).toHaveText("Сохранено на сервере");
+        await invited.getByRole("button", { name: "Команда и доступ", exact: true }).click();
+        await browserExpect(invited.getByRole("dialog", { name: "Команда и доступ", exact: true })).toContainText("Администратор (admin)");
+        await browserExpect(invited.getByRole("button", { name: /^Отозвать участника/ })).toHaveCount(0);
+        await invited.getByRole("button", { name: "Закрыть доступ", exact: true }).click();
+        await page.getByRole("button", { name: "Закрыть доступ", exact: true }).click();
+        await page.reload(); await saved();
+        const ownerField = await nameField(); await ownerField.fill("От владельца"); await ownerField.press("Enter"); await saved();
+        await invited.getByRole("button", { name: "Этап: Этап 1", exact: true }).click();
+        const field = invited.getByLabel("Название", { exact: true }); await field.fill("От администратора"); await field.press("Enter");
+        await browserExpect(invited.getByRole("button", { name: "Сверить конфликт", exact: true })).toBeVisible();
+        expect(await invited.evaluate(() => JSON.stringify(sessionStorage))).toContain("От администратора");
+        await invited.getByRole("button", { name: "Загрузить с сервера", exact: true }).click();
+        await invited.getByRole("button", { name: "Сверить конфликт", exact: true }).click();
+        await invited.getByRole("button", { name: "Подтвердить повтор к новой ревизии", exact: true }).click();
+        await browserExpect(invited.getByRole("status", { name: "Состояние хранения" })).toHaveText("Сохранено на сервере");
+        await page.reload(); await saved(); await browserExpect(page.getByRole("button", { name: "Этап: От администратора", exact: true })).toBeVisible();
+        expect((await read(id)).project.revision).toBe(2);
+        await page.getByRole("button", { name: "Команда и доступ", exact: true }).click();
+        await team.getByRole("button", { name: `Отозвать участника ${invitee}`, exact: true }).click();
+        await team.getByRole("button", { name: "Подтвердить отзыв", exact: true }).click();
+        await browserExpect(team).toContainText("Доступ отозван");
+        const denied: string[] = []; invited.on("request", (r) => { if (/\/api\/v1\/(projects|people)/.test(r.url())) denied.push(r.url()); });
+        await invited.reload(); await browserExpect(invited.getByRole("heading", { name: "Ожидается приглашение", exact: true })).toBeVisible();
+        expect(denied).toEqual([]);
+        expect((await invited.request.get(`${origin}/api/v1/projects`)).status()).toBe(403);
+      } finally { await other.close(); if (extra) await extra.close(); }
+    }, 90_000);
+    it(`V2.1A ${engine}: issue once, sanitized guest view, F5, expiry and link revocation`, async () => {
+      const extra = engine === "webkit" ? await webkit.launch({ headless: true }) : null, engineBrowser = extra ?? browser;
+      if (extra) { await context.close(); context = await extra.newContext({ viewport: { width: 1440, height: 900 } }); page = await context.newPage(); }
+      const anonymous = await engineBrowser.newContext(), guest = await anonymous.newPage();
+      let second: BrowserContext | undefined;
+      try {
+        await registerOwner(); const id = await createProject();
+        for (const command of [
+          { type: "CreateStandaloneResult", id: randomUUID(), stageId: (await read(id)).stages[0]?.id, title: "Гостевой результат" },
+          { type: "CreatePersonAndAssign", id: randomUUID(), kind: "process", targetId: (await read(id)).processes[0]?.id, personId: randomUUID(), fields: { firstName: "PrivatePersonFixture", lastName: "", defaultRole: "", contacts: "private-contact-fixture", note: "private-note-fixture" }, roleLabel: "PrivateRoleFixture" },
+        ]) {
+          const d = await read(id);
+          const response = await page.request.post(`${origin}/api/v1/projects/${id}/commands`, { headers: { origin }, data: { commandId: randomUUID(), version: 1, workspaceId: d.project.workspaceId, projectId: id, expectedRevision: d.project.revision, command } });
+          expect(response.status()).toBe(200);
+        }
+        await page.reload(); await saved();
+        await page.getByRole("button", { name: "Поделиться просмотром", exact: true }).click();
+        const sharing = page.getByRole("dialog", { name: "Поделиться просмотром", exact: true });
+        await sharing.getByRole("button", { name: "Создать гостевую ссылку", exact: true }).click();
+        const issued = sharing.getByLabel("Новая гостевая ссылка"); await browserExpect(issued).toBeVisible();
+        const url = await issued.inputValue(), token = new URL(url).hash.slice(1), seen: string[] = [], exchanges: string[] = [];
+        expect(await page.evaluate((raw) => JSON.stringify(sessionStorage).includes(raw) || JSON.stringify(localStorage).includes(raw), token)).toBe(false);
+        await sharing.getByRole("button", { name: "Закрыть доступ", exact: true }).click();
+        await page.getByRole("button", { name: "Поделиться просмотром", exact: true }).click();
+        await browserExpect(sharing.getByText(/Действует · Только просмотр/)).toBeVisible();
+        await browserExpect(sharing.getByLabel("Новая гостевая ссылка")).toHaveCount(0);
+        guest.on("request", (r) => { seen.push(r.url(), r.headers().referer ?? ""); if (r.url().endsWith("/guest/exchange")) exchanges.push(r.url()); });
+        const response = await guest.goto(url); expect(response?.status()).toBe(200); expect(response?.headers()["referrer-policy"]).toBe("no-referrer");
+        await browserExpect(guest.getByRole("heading", { name: "Серверный проект", exact: true })).toBeVisible();
+        const view = guest.getByRole("main", { name: "Гостевой проект", exact: true });
+        await browserExpect(view.getByRole("heading", { name: "Этап 1", exact: true })).toBeVisible();
+        await browserExpect(view.getByRole("heading", { name: "Процесс 1", exact: true })).toBeVisible();
+        await browserExpect(view).toContainText("Задача 1"); await browserExpect(view).toContainText("Гостевой результат"); await browserExpect(view).toContainText("Дедлайн");
+        expect(new URL(guest.url()).hash).toBe(""); expect(seen.join(" ")).not.toContain(token);
+        expect(await guest.evaluate((raw) => JSON.stringify(sessionStorage).includes(raw) || JSON.stringify(localStorage).includes(raw), token)).toBe(false);
+        expect(await view.textContent()).not.toMatch(/PrivatePersonFixture|private-contact-fixture|private-note-fixture|PrivateRoleFixture/);
+        await browserExpect(guest.locator("input,textarea,select")).toHaveCount(0);
+        await browserExpect(guest.getByRole("button", { name: /Исполнители|Команда и доступ|Поделиться|Экспорт|Отменить/ })).toHaveCount(0);
+        const cookie = (await anonymous.cookies()).find((c) => c.name === "timeline_guest"); expect(cookie?.httpOnly).toBe(true); expect(cookie?.sameSite).toBe("Lax");
+        expect((await guest.request.get(`${origin}/api/v1/people`)).status()).toBe(401);
+        expect((await guest.request.get(`${origin}/api/v1/team`)).status()).toBe(401);
+        expect((await guest.request.post(`${origin}/api/v1/projects/${id}/commands`, { headers: { origin }, data: {} })).status()).toBe(401);
+        await guest.reload(); await browserExpect(guest.getByRole("heading", { name: "Серверный проект", exact: true })).toBeVisible(); expect(exchanges).toHaveLength(1);
+        await admin.query("update guest_sessions set expires_at=now()-interval '1 second'");
+        await guest.getByRole("button", { name: "Обновить просмотр", exact: true }).click();
+        await browserExpect(guest.getByRole("alert")).toContainText("Гостевой доступ недоступен"); await browserExpect(view.getByRole("heading")).toHaveCount(0); expect(exchanges).toHaveLength(1);
+        second = await engineBrowser.newContext(); const nextGuest = await second.newPage(); let nextExchanges = 0;
+        nextGuest.on("request", (r) => { if (r.url().endsWith("/guest/exchange")) nextExchanges++; });
+        await nextGuest.goto(url);
+        await browserExpect(nextGuest.getByRole("heading", { name: "Серверный проект", exact: true })).toBeVisible();
+        await sharing.getByRole("button", { name: /^Отозвать ссылку/ }).click(); await sharing.getByRole("button", { name: "Подтвердить отзыв", exact: true }).click();
+        await browserExpect(sharing).toContainText("Гостевой доступ отозван");
+        await nextGuest.getByRole("button", { name: "Обновить просмотр", exact: true }).click();
+        await browserExpect(nextGuest.getByRole("alert")).toContainText("Гостевой доступ недоступен");
+        await nextGuest.getByRole("button", { name: "Обновить просмотр", exact: true }).click();
+        await browserExpect(nextGuest.getByRole("alert")).toContainText("Гостевой доступ недоступен"); expect(nextExchanges).toBe(1);
+      } finally { await anonymous.close(); await second?.close(); if (extra) await extra.close(); }
+    }, 60_000);
     it(`V2.0C ${engine}: 60s local view, bounded command reads, UI timings and durable content recovery`, async () => {
       await page.setViewportSize({ width: 1440, height: 640 });
       const extra = engine === "webkit" ? await webkit.launch({ headless: true }) : null;

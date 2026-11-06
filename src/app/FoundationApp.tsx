@@ -13,6 +13,7 @@ import type { Snapshot } from "../domain/v2/model";
 
 import type { UIService, ServerRecovery, RecoveryState } from "../application/v2/uiService";
 import { ServerRecoveryPanel } from "./ServerRecoveryPanel";
+import { TeamAccess, ProjectSharing } from "./AccessPanels";
 import { FoundationTimeline } from "../features/timeline/FoundationTimeline";
 import { ProjectsPage } from "../features/projects/ProjectsPage";
 import {
@@ -42,6 +43,7 @@ const noRecovery: RecoveryState = { pending: false, sending: false, message: "",
 const noSubscribe = () => () => undefined;
 const noState = () => noRecovery;
 export function FoundationApp({ service, server }: { service: UIService; server?: { recovery: ServerRecovery; email: string; onLogout: () => Promise<void>; onLogin: () => void } }) {
+  const [accessPanel, setAccessPanel] = useState<"team" | "share" | null>(null);
   const recovery = server?.recovery;
   const recoveryState = useSyncExternalStore(recovery?.subscribe ?? noSubscribe, recovery?.getState ?? noState);
   const [readFailed, setReadFailed] = useState(false), [epoch, setEpoch] = useState(0), [showDrafts, setShowDrafts] = useState(false);
@@ -250,6 +252,8 @@ export function FoundationApp({ service, server }: { service: UIService; server?
           Исполнители
         </button>
         <div className="product-signature" aria-label="TIMELINE">TIME<span>LINE</span><i aria-hidden="true" /></div>
+        {server && <><button className="navigation-button" disabled={busy} onClick={() => { setAccessPanel("team"); }}>Команда и доступ</button>
+          {active && <button className="navigation-button" disabled={busy} onClick={() => { setAccessPanel("share"); }}>Поделиться просмотром</button>}</>}
         <span
           className="workspace-label"
           role="status"
@@ -267,6 +271,8 @@ export function FoundationApp({ service, server }: { service: UIService; server?
         {server && <>{!!Object.keys(recoveryState.drafts).length && !recoveryState.pending && <button onClick={() => { setShowDrafts((open) => !open); }}>Черновик</button>}<span>{server.email}</span><button disabled={busy || recoveryState.pending || !!Object.keys(recoveryState.drafts).length} onClick={() => { void server.onLogout().catch(report); }}>Выйти</button></>}
       </header>
       {server && <>
+        {accessPanel === "team" && <TeamAccess onClose={() => { setAccessPanel(null); }} onMembershipChanged={() => refresh()} />}
+        {accessPanel === "share" && active && <ProjectSharing key={active.project.id} projectId={active.project.id} onClose={() => { setAccessPanel(null); }} />}
         <ServerRecoveryPanel showDrafts={showDrafts} state={recoveryState} recovery={server.recovery} onRecovered={recovered} onError={report} onLogin={server.onLogin} />
         {(readFailed || recoveryState.conflict) && <div className="legacy-notice"><button onClick={() => { void refresh().catch(report); }}>Загрузить с сервера</button><button onClick={server.onLogin}>Войти снова</button></div>}
       </>}
