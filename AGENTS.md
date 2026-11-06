@@ -8,7 +8,7 @@ Use a new short branch from current main; preserve unrelated work. Begin with a 
 
 The owner's or ChatGPT's explicit confirmation of publication, including its SHA/workflow when supplied, is sufficient evidence to start the next authorized stage. Do not block development because your own GitHub API or Pages request returned 403. Do not repeat requests to an unavailable address, bypass its restrictions, or change environment/credentials just to obtain PR access.
 
-The design references in `docs/design-system/README.md`, `docs/design-system/DESIGN_SYSTEM_V2.md` and `docs/design-system/CODEX_HANDOFF.md` are read only for an explicitly assigned visual task. Keep the existing Russian custom timeline, design, geometry and working components during unrelated tasks.
+For a separately authorized visual task, the **current** PLINE design references are `docs/design-system/README.md`, `docs/design-system/DESIGN_SYSTEM_PLINE_V3.md`, `docs/design-system/FIGMA_LAYOUT_MAP.md`, and `docs/design-system/CODEX_HANDOFF.md`. The original four Figma frames set **composition and moved UI positions**, not just colors. `DESIGN_SYSTEM_V2.md` and old WebP references are historical only. Keep the existing timeline domain/geometry and working components during unrelated tasks; this does not authorize visual changes before a separately assigned redesign.
 
 ## Implementation and data safety
 
