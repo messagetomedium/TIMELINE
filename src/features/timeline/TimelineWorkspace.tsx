@@ -115,7 +115,6 @@ export function TimelineWorkspace({ document, onCommit, initialView, onViewChang
       setWidth(entry.contentRect.width);
       if (!initialized.current) {
         if (!initialOptions.view) setCamera((previous) => cameraForFocusDate(previous, initialOptions.focus, entry.contentRect.width, 0.32, WORK_ZOOM));
-        if (body.current && initialOptions.view) body.current.scrollTop = initialOptions.view.cameraY;
         initialized.current = true;
         setViewReady(true);
       }

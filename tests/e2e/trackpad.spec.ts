@@ -75,10 +75,27 @@ test("trackpad: diagonal pan, anchored pinch including result gaps, coalescing a
   await expect.poll(async () => (await camera(scene)).x).toBeCloseTo(pan - 20, 5);
   await page.waitForTimeout(200);
   const final = await camera(scene), y = await body.evaluate(el => el.scrollTop);
+  expect(y).toBeGreaterThan(0);
+  const persistedY = () => page.evaluate(id => new Promise<number>((resolve, reject) => {
+    const request = indexedDB.open("timeline-workspace-v2");
+    request.onerror = () => { reject(Error("Preferences DB unavailable")); };
+    request.onsuccess = () => {
+      const db = request.result, read = db.transaction("preferences").objectStore("preferences").get(`editor:${id}`);
+      read.onerror = () => { db.close(); reject(Error("Preferences read failed")); };
+      read.onsuccess = () => { const row = read.result as { value?: { cameraY?: number } } | undefined; db.close(); resolve(row?.value?.cameraY ?? -1); };
+    };
+  }), before.project.id);
+  await expect.poll(persistedY).toBe(y); // Prove that F5 starts with the nonzero saved preference.
   expect(await current(page)).toEqual(before);
   await page.reload(); await saved(page);
   expect((await camera(scene)).zoom).toBeCloseTo(final.zoom, 8); expect((await camera(scene)).x).toBeCloseTo(final.x, 8);
-  expect(await body.evaluate(el => el.scrollTop)).toBe(y);
+  await expect.poll(() => body.evaluate(el => el.scrollTop)).toBe(y);
+  expect(await persistedY()).toBe(y);
+  const navigatedY = y - 15;
+  await body.evaluate((el, next) => { el.scrollTop = next; }, navigatedY);
+  await page.setViewportSize({ width: 1420, height: 640 });
+  await expect.poll(persistedY).toBe(navigatedY);
+  expect(await body.evaluate(el => el.scrollTop)).toBe(navigatedY); // Later layout must not restore over user navigation.
 });
 test("trackpad: clicks, inline rename, Space pan and wheel during captured edit preserve command boundaries", async ({ page }) => {
   await create(page); const d = await current(page), process = d.processes[0]; if (!process) throw Error("Missing process");

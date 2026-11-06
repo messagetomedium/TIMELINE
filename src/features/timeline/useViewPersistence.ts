@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import type { RefObject } from "react";
 import type { ProjectId, ViewPreferences } from "../../domain";
 
@@ -6,11 +6,25 @@ import type { ProjectId, ViewPreferences } from "../../domain";
 export function useViewPersistence(body: RefObject<HTMLDivElement | null>, initialY: number, view: Omit<ViewPreferences, "cameraY">, ready: boolean, active: boolean, save: (id: ProjectId, view: ViewPreferences) => void) {
   const y = useRef(initialY), timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const latest = useRef<(() => void) | undefined>(undefined), sent = useRef("");
+  const restored = useRef(false);
+  useLayoutEffect(() => {
+    if (!ready || restored.current) return;
+    restored.current = true;
+    // ResizeObserver schedules the measured width. Restore only AFTER that React
+    // commit, with the scroll container's layout applied, before persisting it.
+    const node = body.current;
+    if (node && !active && node.scrollTop === 0) node.scrollTop = initialY;
+    y.current = node?.scrollTop ?? initialY;
+  }, [ready, body, initialY, active]);
   const flush = useCallback(() => {
     clearTimeout(timer.current); timer.current = undefined; latest.current?.();
   }, []);
   const onScroll = useCallback(() => {
-    if (body.current) y.current = body.current.scrollTop;
+    if (body.current) {
+      y.current = body.current.scrollTop;
+      // Navigation before the initial measurement takes precedence over restoration.
+      if (y.current !== 0) restored.current = true;
+    }
     clearTimeout(timer.current); timer.current = setTimeout(flush, 120);
   }, [body, flush]);
   useEffect(() => {
