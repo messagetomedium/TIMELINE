@@ -65,11 +65,22 @@ test("trackpad: diagonal pan, anchored pinch including result gaps, coalescing a
   const pan = c.x;
   const updates = await viewport.evaluate(async el => {
     const r = el.getBoundingClientRect();
-    let count = 0; const observer = new MutationObserver(records => { count += records.length; });
+    let count = 0, resolveFirst: (() => void) | undefined;
+    const firstChange = new Promise<void>(resolve => { resolveFirst = resolve; });
+    const observer = new MutationObserver(records => { count += records.length; resolveFirst?.(); });
     const scene = el.closest('main'); if (!scene) throw Error("Missing scene");
     observer.observe(scene, { attributes: true, attributeFilter: ['data-pan-x'] });
-    for (let i = 0; i < 40; i++) el.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, clientX: r.left + 100, clientY: r.top + 10, deltaX: .5, deltaY: .25 }));
-    await new Promise(resolve => setTimeout(resolve, 75)); observer.disconnect(); return count;
+    try {
+      for (let i = 0; i < 40; i++) el.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, clientX: r.left + 100, clientY: r.top + 10, deltaX: .5, deltaY: .25 }));
+      // WebKit can schedule its first frame beyond 75 ms on a busy CI runner.
+      // Wait for an actual camera mutation, then two frames to catch extra commits.
+      await Promise.race([
+        firstChange,
+        new Promise<never>((_, reject) => { setTimeout(() => { reject(Error("Batched pan produced no camera update")); }, 3000); }),
+      ]);
+      await new Promise<void>(resolve => { requestAnimationFrame(() => { requestAnimationFrame(() => resolve()); }); });
+      return count;
+    } finally { observer.disconnect(); }
   });
   expect(updates).toBe(1);
   await expect.poll(async () => (await camera(scene)).x).toBeCloseTo(pan - 20, 5);
