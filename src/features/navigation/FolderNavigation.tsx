@@ -60,9 +60,10 @@ export function FolderNavigation({
           aria-hidden="true"
         >
           <path d="m3 10 9-7 9 7M5 9v11h5v-7h4v7h5V9" />
-        </svg>
+        </svg><span>ДОМ</span>
       </button>
       <div className="folder-tabs" ref={tabs} data-testid="folder-tabs">
+        {home && <button className="folder-tab active workspace-tab" aria-current="page" onClick={onHome}><span>medium space</span></button>}
         {visible.map((d) => (
           <button
             className={`folder-tab ${activeId === d.project.id ? "active header-project" : ""}`}

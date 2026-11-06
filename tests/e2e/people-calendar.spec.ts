@@ -646,31 +646,20 @@ test("work inspector saves finished date edits with cascade and persistent histo
   const beforeColor=await current(page);
   const process = required(beforeColor.processes[0]);
   await entity(page, process.id).click();
-  const color = page.getByLabel("Цвет процесса", { exact: true });
-  const preview = async (value: string) => {
-    await color.evaluate((el, value) => {
-      Object.getOwnPropertyDescriptor(
-        HTMLInputElement.prototype,
-        "value",
-      )?.set?.call(el, value);
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-    }, value);
-  };
-  await color.focus();
-  await preview("#224466");
-  await preview("#334477");
+  const color = page.getByRole("button", { name: "Цвет процесса", exact: true });
+  await color.click();
+  await expect(page.locator('input[type="color"]')).toHaveCount(0);
   expect(await current(page)).toEqual(beforeColor);
   await color.press("Escape");
   expect(await current(page)).toEqual(beforeColor);
-  await color.focus();
-  await preview("#445588");
-  await preview("#556699");
-  await color.dispatchEvent("change");
+  await color.click();
+  await page.getByRole("button", { name: "Голубой", exact: true }).click();
   await saved(page);
   const colored = await current(page);
-  expect(required(colored.processes[0]).color).toBe("#556699");
+  expect(required(colored.processes[0]).color).toBe("#91CFF5");
   expect(colored.project.revision).toBe(beforeColor.project.revision + 1);
-  await color.press("Enter");
+  await color.click();
+  await page.getByRole("button", { name: "Голубой", exact: true }).press("Enter");
   await saved(page);
   expect(await current(page)).toEqual(colored);
   await page.reload();

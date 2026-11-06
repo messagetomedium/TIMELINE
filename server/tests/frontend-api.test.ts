@@ -20,6 +20,7 @@ const role = `timeline_browser_${randomBytes(8).toString("hex")}`;
 let admin: Pool, runtime: Awaited<ReturnType<typeof createApp>>, browser: Browser, context: BrowserContext, page: Page, mailer: MemoryMailer;
 let origin: string, runtimeUrl: string;
 async function login() {
+  if (await page.getByLabel("PLINE — начало работы", { exact: true }).isVisible()) await page.getByRole("button", { name: "Войти", exact: true }).click();
   await page.getByLabel("Email", { exact: true }).fill(email);
   await page.getByLabel("Пароль", { exact: true }).fill(password);
   await page.getByRole("button", { name: "Войти", exact: true }).click();
@@ -200,6 +201,16 @@ describe("V2.0A browser with real PostgreSQL", () => {
         await page.getByRole("button", { name: "Свернуть свойства", exact: true }).click();
         await browserExpect(taskBar(bob, aTask.id)).toContainText("Задача от A"); expect(await personalView(bob)).toEqual(bobView);
         expect(requestsA.filter((r) => r.startsWith("GET "))).toHaveLength(1); expect(requestsA.filter((r) => r.startsWith("POST "))).toHaveLength(2);
+        await page.getByRole('button', { name: 'Развернуть свойства', exact: true }).click();
+        await page.locator(`[data-entity-id="${aProcess?.id ?? ''}"]`).click();
+        const colorRequests = requestsA.length, colorCounts = await counts();
+        await page.getByRole('button', { name: 'Цвет процесса', exact: true }).click();
+        await browserExpect(page.getByRole('group', { name: 'Палитра процессов' })).toBeVisible();
+        expect(requestsA.length).toBe(colorRequests); expect(await counts()).toEqual(colorCounts);
+        await page.getByRole('button', { name: 'Голубой', exact: true }).click(); await saved();
+        await browserExpect.poll(() => bob.locator(`[data-entity-id="${aProcess?.id ?? ''}"]`).evaluate(el => el.style.getPropertyValue('--bar-color'))).toBe('#91CFF5');
+        expect(await personalView(bob)).toEqual(bobView);
+        await page.getByRole('button', { name: 'Свернуть свойства', exact: true }).click();
         const person = await page.request.post(`${origin}/api/v1/people/commands`, { headers: { origin }, data: { commandId: randomUUID(), workspaceId: d.project.workspaceId, expectedRevision: 0,
           command: { type: "CreatePerson", id: randomUUID(), fields: { firstName: "RealtimePersonFixture", lastName: "", defaultRole: "", contacts: "private-fixture", note: "" } } } });
         expect(person.status()).toBe(200); await browserExpect(people.getByText("RealtimePersonFixture", { exact: true })).toBeVisible(); expect(await personalView(bob)).toEqual(bobView);
@@ -216,7 +227,7 @@ describe("V2.0A browser with real PostgreSQL", () => {
         for (const target of [page, bob]) await browserExpect(target.getByRole("status", { name: "Синхронизация", exact: true })).toHaveText("Обновления подключены");
         expect({ ...await personalView(page), selected: null }).toEqual({ ...aliceView, selected: null });
         expect({ ...await personalView(bob), selected: null }).toEqual({ ...finalBob, selected: null });
-        expect((await read(id)).project.revision).toBe(3);
+        expect((await read(id)).project.revision).toBe(4);
       } finally { await second.close(); if (extra) await extra.close(); }
     }, 90_000);
     it(`V2.1B ${engine}: independent edits, retained same-task draft and offline retry reconnect without F5`, async () => {
@@ -271,7 +282,7 @@ describe("V2.0A browser with real PostgreSQL", () => {
         const secret = new URL(invitation).hash.slice(1), seen: string[] = [];
         invited.on("request", (r) => { seen.push(r.url(), r.headers().referer ?? ""); });
         expect((await invited.goto(invitation))?.status()).toBe(200);
-        await browserExpect(invited.getByRole("heading", { name: "Вход в TIMELINE", exact: true })).toBeVisible();
+        await browserExpect(invited.getByRole("heading", { name: "Вход в аккаунт", exact: true })).toBeVisible();
         expect(new URL(invited.url()).hash).toBe(""); expect(new URL(invited.url()).pathname).toBe("/invite");
         await invited.getByRole("button", { name: "Создать аккаунт", exact: true }).click();
         await invited.getByLabel("Имя", { exact: true }).fill("Приглашённый администратор");
@@ -549,6 +560,15 @@ describe("V2.0A browser with real PostgreSQL", () => {
     }, 60_000);
   }
   it("registers, verifies, signs in; saves edits once and restores projects after reload; resets password and signs out", async () => {
+    await page.goto(origin);
+    const welcome = page.getByLabel("PLINE — начало работы", { exact: true }); await browserExpect(welcome).toBeVisible();
+    const word = await welcome.locator('h1').boundingBox(), folder = await welcome.locator('.pl-hero-folder').boundingBox();
+    if (!word || !folder) throw Error('Missing welcome composition'); expect(folder.x).toBeGreaterThan(word.x);
+    await welcome.getByRole('button', { name: 'Войти', exact: true }).click();
+    const form = await page.locator('.pl-auth-folder').boundingBox(), register = await page.getByRole('button', { name: 'Создать аккаунт', exact: true }).boundingBox();
+    if (!form || !register) throw Error('Missing auth composition');
+    expect(register.y).toBeGreaterThan(form.y + form.height); expect(register.x + register.width).toBeCloseTo(form.x + form.width, 0);
+
     await registerOwner();
     const id = await createProject(), before = await read(id);
     const field = await nameField(); await field.fill("Сохранённый этап"); await field.press("Enter"); await saved();
@@ -586,6 +606,7 @@ describe("V2.0A browser with real PostgreSQL", () => {
     await browserExpect(page.locator(".saved-project-card")).toHaveCount(1);
     expect((await read(id)).project.archivedAt).not.toBeNull();
     await page.getByRole("button", { name: "Выйти", exact: true }).click();
+    await page.getByRole("button", { name: "Войти", exact: true }).click();
     await page.getByRole("button", { name: "Забыли пароль?" }).click();
     await page.getByLabel("Email", { exact: true }).fill(email);
     await page.getByRole("button", { name: "Отправить ссылку" }).click();
@@ -692,7 +713,7 @@ describe("V2.0A browser with real PostgreSQL", () => {
     await page.route(origin + "/", async (route) => { const response = await route.fetch(); await route.fulfill({ response, body: (await response.text()).replace('name="timeline-storage" content="server"', 'name="timeline-storage" content="local"') }); });
     await page.goto(origin); const local = await createLocal(page, "Локальный проект");
     await page.unroute(origin + "/"); await page.reload();
-    await browserExpect(page.getByRole("heading", { name: "Вход в TIMELINE" })).toBeVisible();
+    await browserExpect(page.getByLabel("PLINE — начало работы", { exact: true })).toBeVisible();
     expect(await currentLocal(page)).toEqual(local);
     await page.route(origin + "/", async (route) => { const response = await route.fetch(); await route.fulfill({ response, body: (await response.text()).replace('name="timeline-storage" content="server"', 'name="timeline-storage" content="local"') }); });
     await page.reload();

@@ -37,7 +37,7 @@ export function GuestView({ token }: { token: string | null }) {
     window.addEventListener("focus", check);
     return () => { clearInterval(timer); window.removeEventListener("focus", check); };
   }, [load]);
-  return <div className="app-shell"><header className="app-header"><strong>TIMELINE</strong><span>Гостевой просмотр · Только чтение</span>
+  return <div className="app-shell"><header className="app-header"><strong>PLINE</strong><span>Гостевой просмотр · Только чтение</span>
     <button disabled={busy} onClick={() => { void load(true); }}>Обновить просмотр</button></header>
     <main className="project-overview guest-project" aria-label="Гостевой проект" aria-busy={busy}>
       {error && <p role="alert">{error}</p>}{busy && !value && <p role="status">Открываем гостевой проект…</p>}

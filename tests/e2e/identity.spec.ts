@@ -3,7 +3,7 @@ import { create, current, home, saved } from "./helpers";
 import { semantic } from "../../src/application/v2/history";
 
 test.use({ viewport: { width:1440, height:900 } });
-test("responsive document surfaces retain controls, local Cyrillic typography, row density and reduced motion", async ({page}) => {
+test("responsive document surfaces retain controls, PLINE composition and Cyrillic typography, row density and reduced motion", async ({page}) => {
   await page.goto("./");
   await create(page,"Длинное русское название производственного проекта");
   const original = await current(page);
@@ -15,20 +15,18 @@ test("responsive document surfaces retain controls, local Cyrillic typography, r
     await expect(page.getByRole("heading",{name:"Проекты",exact:true})).toBeVisible();
     await expect(page.getByRole("button",{name:"+ Новый проект",exact:true})).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    expect(await page.locator(".projects-title-row h1").evaluate((e) => parseFloat(getComputedStyle(e).fontSize))).toBeGreaterThanOrEqual(64);
+    expect(await page.locator(".projects-title-row h1").evaluate((e) => parseFloat(getComputedStyle(e).fontSize))).toBeGreaterThanOrEqual(32);
     const homeButton = page.getByRole("button",{name:"Домой",exact:true});
     await homeButton.focus();
     await homeButton.press("Tab");
     await page.keyboard.press("Shift+Tab");
     await expect(homeButton).toBeFocused();
     expect(await homeButton.evaluate((e) => getComputedStyle(e).outlineStyle)).not.toBe("none");
-    expect(await homeButton.evaluate((e) => getComputedStyle(e).outlineColor)).toBe("rgb(36, 87, 255)");
+    expect(await homeButton.evaluate((e) => getComputedStyle(e).outlineColor)).toBe("rgb(0, 0, 0)");
     const h = await homeButton.boundingBox(), tabs = await page.locator(".folder-tabs").boundingBox();
     if (!h || !tabs) throw Error("Navigation has no layout");
     expect(h.x+h.width).toBeLessThanOrEqual(tabs.x);
   }
-  const fonts = await page.evaluate(() => [...document.fonts].filter((f) => f.family.includes("Manrope")).map((f) => f.status));
-  expect(fonts).toContain("loaded");
   await page.locator(".saved-project-card").getByRole("button",{name:"Открыть",exact:true}).click();
   await saved(page);
   for (const size of sizes) {

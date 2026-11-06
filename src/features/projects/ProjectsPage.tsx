@@ -51,12 +51,12 @@ export function ProjectsPage<TBackup extends { documents: readonly unknown[] }>(
     setTimeout(() => { URL.revokeObjectURL(url); }, 1000);
   };
   return <main className="projects-page" aria-label="Проекты">
-    <header className="projects-heading"><div><p className="eyebrow"><span className="editorial-index" aria-hidden="true">TL /</span> Рабочее пространство</p><div className="projects-title-row"><h1>{archive ? "Архив" : "Проекты"}</h1><div className="view-switch" role="group" aria-label="Представление проектов">
+    <header className="projects-heading"><div><div className="projects-title-row"><h1 aria-label={archive ? "Архив" : "Проекты"}>{archive ? "Архив" : "Все проекты"}</h1><div className="view-switch" role="group" aria-label="Представление проектов">
       <button aria-pressed={preferences.mode === 'cards'} onClick={() => { onPreferences({ ...preferences, mode: 'cards' }); }}><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Карточки</button>
       <button aria-pressed={preferences.mode === 'timeline'} onClick={() => { onPreferences({ ...preferences, mode: 'timeline' }); }}><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 5h10M8 12h13M3 19h14"/><path d="M3 3v4M8 10v4M17 17v4"/></svg>Таймлайн</button>
-    </div></div></div><button className="primary-button" onClick={onNew}>+ Новый проект</button></header>
+    </div></div></div>{preferences.mode === 'timeline' && <button className="quiet-button" onClick={onNew}>+ Новый проект</button>}</header>
     {portfolio && <div className="projects-storage">
-      <button onClick={() => { location.hash = archive ? '/projects' : '/archive'; }}>{archive ? 'Все проекты' : 'Архив'}</button>
+      {archive && <button onClick={() => { location.hash = '/projects'; }}>Все проекты</button>}
       {!serverMode && <div><button aria-label="Отменить в портфеле" disabled={!portfolio.undo.length} onClick={() => { onUndo?.(false); }}>↶</button><button aria-label="Повторить в портфеле" disabled={!portfolio.redo.length} onClick={() => { onUndo?.(true); }}>↷</button></div>}
     </div>}
     <div className="projects-storage"><span>{serverMode ? "Данные на сервере · Undo/Redo и импорт JSON пока недоступны. Вид портфеля — на время сеанса." : "Данные хранятся в этом браузере · без синхронизации между устройствами"}</span><div><button onClick={() => { void exportFile(); }}>Экспортировать резервную копию JSON</button>{!serverMode && <button onClick={() => { file.current?.click(); }}>Импортировать JSON</button>}</div>
@@ -67,8 +67,7 @@ export function ProjectsPage<TBackup extends { documents: readonly unknown[] }>(
     </div>
     {archive ? <ProjectCardGrid documents={cards} inactiveIds={inactiveIds} onOpen={onOpen} {...actions} onDelete={undefined} onRestore={(d) => { onPortfolio?.({ type: 'ArchiveProject', id: d.project.id, archived: false }); }} />
       : preferences.mode === 'cards' ? <>
-        {cards.length === 0 && <section className="projects-empty"><h2>Проектов пока нет</h2><p>Создайте проект: два этапа, четыре процесса и восемь задач без назначенных исполнителей.</p><button className="primary-button" onClick={onNew}>Создать первый проект</button></section>}
-        <ProjectCardGrid documents={cards} inactiveIds={inactiveIds} onOpen={onOpen} {...cardActions} />
+        <ProjectCardGrid documents={cards} inactiveIds={inactiveIds} onOpen={onOpen} onNew={onNew} {...cardActions} />
       </> : <>
         <button aria-pressed={preferences.portfolio.showInactive ?? false} onClick={() => { changePortfolio({ ...preferences.portfolio, showInactive: !preferences.portfolio.showInactive }); }}>{preferences.portfolio.showInactive ? 'Скрыть неактивные' : 'Показать неактивные'}</button>
         <PortfolioTimeline documents={timeline} preferences={preferences.portfolio} onPreferences={changePortfolio} onOpen={onOpen} onShift={onShift} onReorder={onPortfolio ? (order) => { onPortfolio({ type: 'ReorderProjects', order }); } : undefined} {...cardActions} />

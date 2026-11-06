@@ -40,7 +40,7 @@ export function PeopleTimeline({
   return (
     <section className="performers-section" aria-label="Занятость исполнителей">
       <header className="performers-heading">
-        <h2>Исполнители</h2>
+        <h2>УЧАСТНИКИ</h2>
         <span>
           Занятость · {rows.filter((r) => !r.id.startsWith("role:")).length}{" "}
           человек <i /> Общая ось времени · только просмотр

@@ -200,8 +200,8 @@ export function FoundationApp({ service, server }: { service: UIService; server?
   }, [active, undo, peopleOpen, catalog.revision, run, service, recovery]);
   useEffect(() => {
     document.title = active
-      ? `${active.project.name} — Таймлайн`
-      : "Проекты — Таймлайн";
+      ? `${active.project.name} — PLINE`
+      : "Проекты — PLINE";
   }, [active]);
   const saveView = useCallback((projectId: ProjectId, view: ViewPreferences) => {
     // The timeline owns live presentation state. No root rerender, saving status or content queue.
@@ -238,7 +238,7 @@ export function FoundationApp({ service, server }: { service: UIService; server?
       return null;
     });
   return (
-    <div className="app-shell" onInputCapture={(event) => {
+    <div className={`app-shell pline ${id ? "project-screen" : "projects-screen"}`} onInputCapture={(event) => {
       if (!recovery || !(event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)) return;
       const input = event.target;
       if (input.closest("[data-presentation]") || input.getAttribute("role") === "combobox" || input.type === "search") return;
@@ -266,18 +266,16 @@ export function FoundationApp({ service, server }: { service: UIService; server?
             location.hash = `/projects/${projectId}`;
           }}
         />
-        <button
-          className="navigation-button people-nav"
-          disabled={!documents}
-          onClick={() => {
-            setPeopleOpen(true);
-          }}
-        >
-          Исполнители
-        </button>
-        <div className="product-signature" aria-label="TIMELINE">TIME<span>LINE</span><i aria-hidden="true" /></div>
-        {server && <><button className="navigation-button" disabled={busy} onClick={() => { setAccessPanel("team"); }}>Команда и доступ</button>
-          {active && <button className="navigation-button" disabled={busy} onClick={() => { setAccessPanel("share"); }}>Поделиться просмотром</button>}</>}
+        <div className="workspace-utilities">
+          <button className="navigation-button archive-nav" onClick={() => { location.hash = "/archive"; }}>Архив</button>
+          <button className="navigation-button people-nav" aria-label="Исполнители" disabled={!documents} onClick={() => { setPeopleOpen(true); }}>люди</button>
+          {server && <><button className="navigation-button" disabled={busy} onClick={() => { setAccessPanel("team"); }}>Команда и доступ</button>
+            {active && <button className="navigation-button" disabled={busy} onClick={() => { setAccessPanel("share"); }}>Поделиться просмотром</button>}
+            <button disabled={busy || recoveryState.pending || !!Object.keys(recoveryState.drafts).length} onClick={() => { void server.onLogout().catch(report); }}>Выйти</button></>}
+        </div>
+        <div className="product-signature pl-wordmark" aria-label="PLINE">PLINE</div>
+      </header>
+      <div className="workspace-status">
         <span
           className="workspace-label"
           role="status"
@@ -292,11 +290,11 @@ export function FoundationApp({ service, server }: { service: UIService; server?
               ? recovery ? "Сохранено на сервере" : "Локально в этом браузере"
               : "Открываем хранилище…"}
         </span>
-        {server && <>{!!Object.keys(recoveryState.drafts).length && !recoveryState.pending && <button onClick={() => { setShowDrafts((open) => !open); }}>Черновик</button>}<span>{server.email}</span><button disabled={busy || recoveryState.pending || !!Object.keys(recoveryState.drafts).length} onClick={() => { void server.onLogout().catch(report); }}>Выйти</button></>}
+        {server && <>{!!Object.keys(recoveryState.drafts).length && !recoveryState.pending && <button onClick={() => { setShowDrafts((open) => !open); }}>Черновик</button>}<span className="session-email">{server.email}</span></>}
         {recoveryState.synchronization && <span role="status" aria-label="Синхронизация">{deferredUpdate ? "Новые данные ожидают завершения вашей правки" : {
           connecting: "Подключаем обновления…", live: "Обновления подключены", offline: "Нет связи с обновлениями; повторяем подключение", denied: "Доступ к обновлениям закрыт",
         }[recoveryState.synchronization]}</span>}
-      </header>
+      </div>
       {server && <>
         {accessPanel === "team" && <TeamAccess onClose={() => { setAccessPanel(null); }} onMembershipChanged={() => refresh()} />}
         {accessPanel === "share" && active && <ProjectSharing key={active.project.id} projectId={active.project.id} onClose={() => { setAccessPanel(null); }} />}
