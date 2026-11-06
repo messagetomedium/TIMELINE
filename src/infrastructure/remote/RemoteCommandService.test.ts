@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { RemoteCommandService } from "./RemoteCommandService";
 import { ApiError } from "./ApiClient";
 import type { RequestApi } from "./ApiClient";
@@ -17,6 +17,60 @@ function result(body: unknown, revision = 1) {
   return { commandId: b.commandId, projectId: b.projectId ?? null, revision, workspaceRevision: revision, peopleRevision: 0, changed: true };
 }
 describe("frontend API command/recovery boundary", () => {
+  it("an older receipt after reconnect never reduces workspace revision or rebases another stale field", async () => {
+    const old = document(), current = { ...old, project: { ...old.project, revision: 2 } }, writes: { path: string; body: unknown }[] = [];
+    const api: RequestApi = (path, method, body) => {
+      if (method === "POST") { writes.push({ path, body }); return Promise.resolve({ ...result(body, 1), projectId: current.project.id, workspaceRevision: path === "/api/v1/projects" ? 6 : 1 }); }
+      return Promise.resolve(path === "/api/v1/workspaces/current" ? { workspace: { id: WORKSPACE_ID, revision: 5 }, role: "owner" }
+        : path === "/api/v1/people" ? { workspaceId: WORKSPACE_ID, revision: 0, people: [], retiredAssignments: [] }
+        : path.includes("limit=") ? { projects: [{ project: current.project }], workspaceRevision: 5, nextOffset: null } : current);
+    };
+    const service = new RemoteCommandService("old-receipt", api, storage()); await service.screen(current.project.id);
+    const e = service.envelope(old, { type: "Rename", kind: "project", id: old.project.id, value: "Receipt" });
+    await service.execute(e); await service.executeLocal({ ...e, commandId: crypto.randomUUID() });
+    await service.create({ type: "CreateProject", name: "Next", description: "", startDate: dateOnly("2026-11-02") });
+    expect(writes[1]?.body).toMatchObject({ expectedRevision: 0 }); expect(writes[2]?.body).toMatchObject({ expectedRevision: 5 });
+  });
+  it("renews only an outstanding leased command and never reports success before its ACK", async () => {
+    vi.useFakeTimers();
+    const d = document(), lease = { id: crypto.randomUUID(), fence: 1, expiresAt: new Date(Date.now() + 20_000).toISOString(), baseRevision: 0 };
+    let acknowledge: ((value: unknown) => void) | undefined; const renewals: unknown[] = [];
+    const api: RequestApi = (path, _method, body) => {
+      if (path.endsWith("/leases")) return Promise.resolve({ lease });
+      if (path.endsWith("/renew")) { renewals.push(body); return Promise.resolve({ lease }); }
+      if (path.endsWith("/commands")) return new Promise((resolve) => { acknowledge = resolve; });
+      return Promise.resolve({ released: true });
+    };
+    try {
+      const service = new RemoteCommandService("renew", api, storage(), true), e = service.envelope(d, { type: "Rename", kind: "project", id: d.project.id, value: "ACK" });
+      const saving = service.execute(e); await vi.advanceTimersByTimeAsync(6000);
+      expect(renewals).toEqual([{ commandId: e.commandId, fence: 1 }]); expect(service.getState()).toMatchObject({ pending: true, sending: true });
+      acknowledge?.(result(e)); await saving; await vi.advanceTimersByTimeAsync(12_000);
+      expect(renewals).toHaveLength(1); expect(service.getState()).toMatchObject({ pending: false, sending: false });
+    } finally { vi.useRealTimers(); }
+  });
+  it("never rebases a queued stale field over a revision jump that includes another actor", async () => {
+    const d = document(), requests: unknown[] = [];
+    const service = new RemoteCommandService("jump", (_path, _method, body) => { requests.push(body); return Promise.resolve(result(body, 3)); }, storage());
+    const e = service.envelope(d, { type: "Rename", kind: "project", id: d.project.id, value: "First" });
+    await service.execute(e); await service.executeLocal({ ...e, commandId: crypto.randomUUID(), command: { ...e.command, type: "Rename", kind: "project", id: d.project.id, value: "Queued" } });
+    expect(requests[1]).toMatchObject({ expectedRevision: 0 });
+  });
+  it("persists lease proof beside the original envelope and retries an uncertain ACK with identical commandId/body", async () => {
+    const store = storage(), d = document(), bodies: unknown[] = [], headers: unknown[] = []; let attempts = 0;
+    const api: RequestApi = (path, _method, body, options) => {
+      if (path.endsWith("/leases")) return Promise.resolve({ lease: { id: crypto.randomUUID(), fence: 7, expiresAt: new Date(Date.now() + 20_000).toISOString(), baseRevision: 0 } });
+      if (path.endsWith("/commands")) {
+        bodies.push(body); headers.push(options?.headers); attempts++;
+        expect(store.getItem("timeline-api-draft-v1:leased")).toContain('"fence":7');
+        return attempts === 1 ? Promise.reject(new ApiError(0, "UNAVAILABLE")) : Promise.resolve(result(body));
+      }
+      return Promise.resolve({ released: true });
+    };
+    const first = new RemoteCommandService("leased", api, store, true), e = first.envelope(d, { type: "Rename", kind: "project", id: d.project.id, value: "Keep" });
+    await expect(first.execute(e)).rejects.toThrow(); const resumed = new RemoteCommandService("leased", api, store, true); await resumed.retry();
+    expect(bodies).toEqual([e, e]); expect(headers[0]).toEqual(headers[1]); expect(resumed.getState().pending).toBe(false);
+  });
   it("retries a lost acknowledgement after reload with the exact same envelope and isolates user drafts", async () => {
     const store = storage(), requests: unknown[] = [], d = document();
     const api: RequestApi = (_path, _method, body) => { requests.push(body); return requests.length === 1 ? Promise.reject(new ApiError(0, "UNAVAILABLE")) : Promise.resolve(result(body)); };
@@ -34,13 +88,19 @@ describe("frontend API command/recovery boundary", () => {
     expect(new RemoteCommandService("one", api, store).getState().drafts).toEqual({});
   });
   it("never overwrites a pending intent with a second command or silently rebases a conflict", async () => {
-    const d = document(), requests: unknown[] = [];
-    const api: RequestApi = (path, method, body) => {
+    const d = document(), requests: unknown[] = [], prepared: unknown[] = [], proofs: unknown[] = [];
+    const api: RequestApi = (path, method, body, options) => {
+      if (path.endsWith("/leases")) {
+        prepared.push(body);
+        return Promise.resolve({ lease: { id: crypto.randomUUID(), fence: prepared.length, expiresAt: new Date(Date.now() + 20_000).toISOString(), baseRevision: prepared.length === 1 ? 0 : 7 } });
+      }
+      if (method === "DELETE") return Promise.resolve({ released: true });
+      if (path.endsWith("/commands")) proofs.push(options?.headers);
       if (method === "POST") { requests.push(body); return requests.length === 1 ? Promise.reject(new ApiError(409, "REVISION_CONFLICT")) : Promise.resolve(result(body, 8)); }
       expect(path).toBe(`/api/v1/projects/${d.project.id}`);
       return Promise.resolve({ ...d, project: { ...d.project, revision: 7 } });
     };
-    const service = new RemoteCommandService("one", api, storage());
+    const service = new RemoteCommandService("one", api, storage(), true);
     const e = service.envelope(d, { type: "Rename", kind: "project", id: d.project.id, value: "Моя правка" });
     await expect(service.execute(e)).rejects.toThrow("изменились");
     await expect(service.execute({ ...e, commandId: crypto.randomUUID() })).rejects.toThrow("Сначала разрешите");
@@ -48,6 +108,9 @@ describe("frontend API command/recovery boundary", () => {
     await service.reapply();
     expect(requests[1]).toMatchObject({ ...e, commandId: (requests[1] as typeof e).commandId, expectedRevision: 7 });
     expect((requests[1] as typeof e).commandId).not.toBe(e.commandId);
+    expect(prepared).toEqual(requests);
+    expect(proofs[0]).toMatchObject({ "X-Timeline-Fence": "1" });
+    expect(proofs[1]).toMatchObject({ "X-Timeline-Fence": "2" });
   });
   it.each([401, 403, 422, 503])("keeps failed intent and input for HTTP %i without local fallback", async (status) => {
     const store = storage(), d = document();

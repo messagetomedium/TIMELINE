@@ -19,9 +19,12 @@ import { v2BackupSchema } from "../../application/v2/backup";
 import { SessionPresentation, tabStorage } from "./SessionPresentation";
 import { ApiError, requestApi } from "./ApiClient";
 import type { RequestApi } from "./ApiClient";
+import { cursorSchema, leasePreparedSchema, leaseProofSchema } from "../../application/v2/collaborationContracts";
+import type { Change, LeaseProof } from "../../application/v2/collaborationContracts";
+import { watchRealtime } from "./RealtimeChannel";
 
 const pendingSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("project"), body: envelopeSchema }),
+  z.object({ kind: z.literal("project"), body: envelopeSchema, lease: leaseProofSchema.optional() }),
   z.object({ kind: z.literal("create"), body: createProjectSchema }),
   z.object({ kind: z.literal("workspace"), body: workspaceCommandSchema }),
   z.object({ kind: z.literal("people"), body: peopleEnvelopeSchema }),
@@ -52,7 +55,13 @@ export class RemoteCommandService implements UIService, ServerRecovery {
   private dirtyProjects = new Set<string>();
   private generation = 0;
   private reads = new Map<string, ReturnType<UIService["screen"]>>();
-  constructor(userId: string, api = requestApi, storage: Pick<Storage, "getItem" | "setItem" | "removeItem"> = tabStorage) {
+  private active: Snapshot | null = null;
+  private cursor: number | null = null;
+  private ownCommands = new Set<string>();
+  private userId: string;
+  private collaboration: boolean;
+  constructor(userId: string, api = requestApi, storage: Pick<Storage, "getItem" | "setItem" | "removeItem"> = tabStorage, collaboration = false) {
+    this.userId = userId; this.collaboration = collaboration;
     this.api = api; this.storage = storage; this.presentation = new SessionPresentation(userId, storage); this.key = `timeline-api-draft-v1:${userId}`;
     try {
       const raw = storage.getItem(this.key);
@@ -105,18 +114,20 @@ export class RemoteCommandService implements UIService, ServerRecovery {
     this.pending = null; this.drafts = {};
     this.update({ pending: false, message: "", intent: "", conflict: false, authRequired: false, drafts: {} });
   };
-  private async send(pending: Pending): Promise<string | null> {
+  private async send(pending: Pending, retry = false): Promise<string | null> {
     if (this.state.sending) throw Error("Запрос уже выполняется");
     this.pending = pending;
     this.update({ pending: true, sending: true, intent: JSON.stringify(pending.body, null, 2), message: "", conflict: false, authRequired: false });
     const drafts = this.drafts;
+    this.ownCommands.add(pending.body.commandId);
+    if (this.ownCommands.size > 256) this.ownCommands.delete(this.ownCommands.values().next().value ?? "");
     try {
       this.persist();
       const path = pending.kind === "project" ? `/api/v1/projects/${pending.body.projectId}/commands`
         : pending.kind === "create" ? "/api/v1/projects"
         : pending.kind === "workspace" ? "/api/v1/workspace/commands"
         : "/api/v1/people/commands";
-      const response = await this.api(path, "POST", pending.body);
+      const response = pending.kind === "project" && this.collaboration ? await this.sendLeased(pending, retry) : await this.api(path, "POST", pending.body);
       let projectId: string | null = null;
       const result = commandResultSchema.parse(response);
       if (result.commandId !== pending.body.commandId) throw Error("Сервер не подтвердил исходную команду");
@@ -124,10 +135,11 @@ export class RemoteCommandService implements UIService, ServerRecovery {
       this.generation++;
       this.metadataDirty ||= pending.kind === "create" || pending.kind === "workspace" || pending.kind === "people" || this.revision !== result.workspaceRevision;
       this.catalogDirty ||= this.catalog?.revision !== result.peopleRevision;
-      this.revision = result.workspaceRevision;
+      this.revision = Math.max(this.revision, result.workspaceRevision);
       if (pending.kind === "project") {
         this.dirtyProjects.add(pending.body.projectId);
-        if (result.revision !== pending.body.expectedRevision) {
+        // A revision jump includes external commits. Never rebase another queued field over them.
+        if (result.revision === pending.body.expectedRevision + 1 && (this.documents.find((d) => d.project.id === projectId)?.project.revision ?? 0) <= result.revision) {
           const links = this.ownRevisions.get(pending.body.projectId) ?? new Map<number, number>();
           links.set(pending.body.expectedRevision, result.revision);
           this.ownRevisions.set(pending.body.projectId, links);
@@ -151,7 +163,75 @@ export class RemoteCommandService implements UIService, ServerRecovery {
     if (this.pending || this.state.pending) throw Error("Сначала разрешите неподтверждённую правку. Новая команда не отправлена.");
     return this.send(pending);
   }
-  retry = () => this.pending ? this.send(this.pending) : Promise.resolve(null);
+  retry = () => this.pending ? this.send(this.pending, true) : Promise.resolve(null);
+  private async sendLeased(original: Extract<Pending, { kind: "project" }>, retry: boolean) {
+    let pending = original, proof: LeaseProof | undefined = pending.lease, timer: ReturnType<typeof setInterval> | undefined, renewing = false, finished = false;
+    const root = `/api/v1/projects/${pending.body.projectId}`;
+    const prepare = async () => {
+      const result = leasePreparedSchema.parse(await this.api(`${root}/leases`, "POST", pending.body));
+      if ("receipt" in result) return result.receipt;
+      proof = { id: result.lease.id, fence: result.lease.fence };
+      pending = { ...pending, lease: proof }; this.pending = pending; this.persist();
+      return null;
+    };
+    try {
+      if (!proof) { const receipt = await prepare(); if (receipt) return receipt; }
+      timer = setInterval(() => {
+        if (!proof || renewing || finished) return; renewing = true;
+        void this.api(`${root}/leases/${proof.id}/renew`, "POST", { commandId: pending.body.commandId, fence: proof.fence })
+          .then((value) => { if (value && typeof value === "object" && "committed" in value) clearInterval(timer); })
+          .catch(() => { if (!finished) this.update({ message: "Связь с правом изменения прервана. Ожидаем подтверждение команды; черновик сохранён." }); })
+          .finally(() => { renewing = false; });
+      }, 6000);
+      const dispatch = () => this.api(`${root}/commands`, "POST", pending.body, { headers: { "X-Timeline-Lease": proof?.id ?? "", "X-Timeline-Fence": String(proof?.fence) } });
+      let result: unknown;
+      try { result = await dispatch(); }
+      catch (e) {
+        if (!(retry && e instanceof ApiError && e.code === "LEASE_STALE")) throw e;
+        const receipt = await prepare(); result = receipt ?? await dispatch();
+      }
+      finished = true; return result;
+    } finally {
+      clearInterval(timer);
+      if (!finished && proof) void this.api(`${root}/leases/${proof.id}`, "DELETE", { commandId: pending.body.commandId, fence: proof.fence }).catch(() => undefined);
+      finished = true;
+    }
+  }
+  private async readCursor() {
+    const value = cursorSchema.parse(await this.api("/api/v1/realtime/cursor"));
+    if (value.userId !== this.userId || value.workspaceId !== WORKSPACE_ID) throw new ApiError(401, "STREAM_IDENTITY");
+    return value.sequence;
+  }
+  startRealtime = (invalidated: () => Promise<void>) => {
+    if (!this.collaboration || this.cursor === null) return () => undefined;
+    let alive = true, timer: ReturnType<typeof setTimeout> | undefined;
+    const invalidate = () => { clearTimeout(timer); timer = setTimeout(() => { if (alive) void invalidated().catch(() => undefined); }, 80); };
+    const status = (synchronization: NonNullable<RecoveryState["synchronization"]>) => {
+      if (!alive || this.state.synchronization === synchronization) return;
+      this.update({ synchronization, ...(synchronization === "denied" ? { authRequired: true, message: "Доступ к обновлениям завершён. Войдите снова; незавершённый ввод сохранён в этой вкладке." }
+        : synchronization === "live" && this.state.authRequired ? { authRequired: false, message: this.state.pending ? "Вход восстановлен. Повторите исходный запрос либо сверьте конфликт; черновик сохранён." : "" } : {}) });
+    };
+    const stop = watchRealtime({ userId: this.userId, sequence: this.cursor, status,
+      resync: async () => {
+        const cursor = await this.readCursor(); if (!alive) return cursor;
+        this.metadataDirty = true; this.catalogDirty = true; this.generation++;
+        await invalidated(); this.cursor = cursor; return cursor;
+      }, change: (change: Change) => {
+        if (!alive) return; this.cursor = change.sequence;
+        if (change.commandId && this.ownCommands.has(change.commandId)) return;
+        const known = change.projectId ? this.documents.find((d) => d.project.id === change.projectId)?.project.revision : undefined;
+        const workspaceChanged = change.workspaceRevision > this.revision, peopleChanged = change.peopleRevision > (this.catalog?.revision ?? -1);
+        const projectChanged = change.projectId !== null && (known === undefined || change.revision > known);
+        if (!workspaceChanged && !peopleChanged && !projectChanged) return;
+        if (projectChanged && change.projectId) this.ownRevisions.delete(change.projectId);
+        this.generation++;
+        this.catalogDirty ||= peopleChanged;
+        this.metadataDirty ||= workspaceChanged || projectChanged && change.projectId !== this.active?.project.id;
+        if (projectChanged && change.projectId === this.active?.project.id) this.dirtyProjects.add(change.projectId);
+        invalidate();
+      } });
+    return () => { alive = false; clearTimeout(timer); stop(); };
+  };
   reapply = async () => {
     if (!this.pending || !this.state.conflict) throw Error("Повтор с новой ревизией возможен только после явного конфликта");
     if (this.state.sending) throw Error("Запрос уже выполняется");
@@ -162,7 +242,8 @@ export class RemoteCommandService implements UIService, ServerRecovery {
       let next: Pending;
       if (old.kind === "project") {
         const d = snapshotSchema.parse(await this.api(`/api/v1/projects/${old.body.projectId}`));
-        next = { ...old, body: { ...old.body, commandId: crypto.randomUUID(), expectedRevision: d.project.revision } };
+        // Explicit review creates a new intent; the old fence only proves the old envelope.
+        next = { kind: "project", body: { ...old.body, commandId: crypto.randomUUID(), expectedRevision: d.project.revision } };
       } else if (old.kind === "people") {
         const c = z.object({ revision: z.number().int().nonnegative() }).parse(await this.api("/api/v1/people"));
         next = { ...old, body: { ...old.body, commandId: crypto.randomUUID(), expectedRevision: c.revision } };
@@ -193,11 +274,13 @@ export class RemoteCommandService implements UIService, ServerRecovery {
     return catalogSchema.parse({ ...z.object({ workspaceId: z.literal(WORKSPACE_ID), revision: z.number(), people: z.array(z.unknown()), retiredAssignments: z.array(z.unknown()) }).parse(await this.api("/api/v1/people")), version: 1, undo: [], redo: [] });
   }
   private async readScreen(id: string | null, afterCommand: boolean): ReturnType<UIService["screen"]> {
+    // Capture BEFORE snapshot reads: replay includes any commit racing their completion.
+    if (this.collaboration && this.cursor === null) this.cursor = await this.readCursor();
     const generation = this.generation;
     let active: Snapshot | null;
     if (afterCommand && !this.metadataDirty && this.catalog) {
       // ACK revisions identify what can have changed. No workspace/list fetch per field edit.
-      const ids = new Set([...this.dirtyProjects, ...(id ? [id] : [])]);
+      const ids = new Set([...this.dirtyProjects, ...(id && id !== this.active?.project.id ? [id] : [])]);
       const [docs, catalog] = await Promise.all([
         Promise.all([...ids].map((key) => this.load(key))), this.catalogDirty ? this.readCatalog() : Promise.resolve(this.catalog),
       ]);
@@ -205,7 +288,7 @@ export class RemoteCommandService implements UIService, ServerRecovery {
         const updated = docs.find((d) => d?.project.id === summary.project.id);
         return updated ? { project: updated.project } : summary;
       });
-      this.catalog = catalog; active = docs.find((d) => d?.project.id === id) ?? null;
+      this.catalog = catalog; active = docs.find((d) => d?.project.id === id) ?? (this.active?.project.id === id ? this.active : null);
     } else {
       const [rawWorkspace, list, catalog, detail] = await Promise.all([
         this.api("/api/v1/workspaces/current"), this.list(), this.readCatalog(), id ? this.load(id) : Promise.resolve(null),
@@ -215,6 +298,7 @@ export class RemoteCommandService implements UIService, ServerRecovery {
     }
     if (generation !== this.generation) { this.metadataDirty = true; return this.readScreen(id, false); }
     this.dirtyProjects.clear(); this.metadataDirty = false; this.catalogDirty = false;
+    this.active = active;
     this.preferences = this.presentation.workspace();
     const views: Record<string, ViewPreferences> = active ? { [active.project.id]: this.presentation.view(active) } : {};
     return { documents: this.documents, active, preferences: this.preferences, views, catalog: this.catalog,

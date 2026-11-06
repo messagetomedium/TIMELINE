@@ -47,3 +47,24 @@ export const receipts = pgTable("command_receipts", { workspaceId: uuid("workspa
 export const auditEvents = pgTable("audit_events", { id: uuid("id").primaryKey(), workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id), actorId: text("actor_id").notNull().references(() => user.id), commandId: uuid("command_id").notNull(), projectId: uuid("project_id"), kind: text("kind").notNull(), revision: integer("revision").notNull(), createdAt: time("created_at").notNull().defaultNow() }, (t) => [index("audit_workspace_time_idx").on(t.workspaceId,t.createdAt), foreignKey({ columns:[t.workspaceId,t.projectId], foreignColumns:[projects.workspaceId,projects.id] })]);
 export const guestLinks = pgTable("guest_links", { id: uuid("id").primaryKey(), workspaceId: uuid("workspace_id").notNull(), projectId: uuid("project_id").notNull(), creatorId: text("creator_id").notNull().references(() => user.id), tokenHash: text("token_hash").notNull().unique(), revokedAt: time("revoked_at"), permissions: text("permissions").notNull().default("read") }, (t) => [unique("guest_link_scope").on(t.workspaceId,t.id), foreignKey({ columns:[t.workspaceId,t.projectId], foreignColumns:[projects.workspaceId,projects.id] }), check("guest_read_only",sql`${t.permissions} = 'read'`)]);
 export const guestSessions = pgTable("guest_sessions", { id: uuid("id").primaryKey(), workspaceId: uuid("workspace_id").notNull(), linkId: uuid("link_id").notNull(), tokenHash: text("token_hash").notNull().unique(), expiresAt: time("expires_at").notNull() }, (t) => [foreignKey({ columns:[t.workspaceId,t.linkId], foreignColumns:[guestLinks.workspaceId,guestLinks.id] }), index("guest_sessions_workspace_expiry_idx").on(t.workspaceId,t.expiresAt)]);
+
+// Durable workspace-local counters; no sequence privileges or in-memory lock authority.
+export const collaborationState = pgTable("collaboration_state", {
+  workspaceId: uuid("workspace_id").primaryKey().references(() => workspaces.id),
+  sequence: bigint("sequence", { mode: "number" }).notNull().default(0), fence: bigint("fence", { mode: "number" }).notNull().default(0),
+}, (t) => [check("collaboration_counters_safe", sql`${t.sequence} between 0 and 9007199254740991 and ${t.fence} between 0 and 9007199254740991`)]);
+export const workspaceEvents = pgTable("workspace_events", {
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id), sequence: bigint("sequence", { mode: "number" }).notNull(),
+  projectId: uuid("project_id"), commandId: uuid("command_id"), revision: revision(), workspaceRevision: integer("workspace_revision").notNull(), peopleRevision: integer("people_revision").notNull(),
+  resources: jsonb("resources").notNull(), createdAt: time("created_at").notNull().defaultNow(),
+}, (t) => [primaryKey({ columns: [t.workspaceId, t.sequence] }), index("events_project_revision_idx").on(t.workspaceId, t.projectId, t.revision),
+  foreignKey({ columns: [t.workspaceId, t.projectId], foreignColumns: [projects.workspaceId, projects.id] })]);
+export const editLeases = pgTable("edit_leases", {
+  id: uuid("id").primaryKey(), workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id), projectId: uuid("project_id").notNull(),
+  ownerId: text("owner_id").notNull().references(() => user.id), sessionId: text("session_id").notNull().references(() => session.id, { onDelete: "cascade" }),
+  commandId: uuid("command_id").notNull(), requestHash: text("request_hash").notNull(), fence: bigint("fence", { mode: "number" }).notNull(),
+  resources: jsonb("resources").notNull(), basis: jsonb("basis").notNull(), deltaHash: text("delta_hash").notNull(), baseRevision: integer("base_revision").notNull(), peopleRevision: integer("people_revision").notNull(),
+  expiresAt: time("expires_at").notNull(), createdAt: time("created_at").notNull().defaultNow(),
+}, (t) => [index("leases_project_expiry_idx").on(t.workspaceId, t.projectId, t.expiresAt),
+  unique("lease_intent_unique").on(t.workspaceId, t.ownerId, t.sessionId, t.commandId),
+  foreignKey({ columns: [t.workspaceId, t.projectId], foreignColumns: [projects.workspaceId, projects.id] })]);

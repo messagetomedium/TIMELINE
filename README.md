@@ -79,6 +79,9 @@ auth, приглашения и гостевой обмен ограничены
 | POST `/projects` | Шаблон: commandId, version=1, workspaceId, expectedRevision пространства, name, description, startDate |
 | GET `/projects/:id` | Выбранный V2-проект из нормализованных таблиц |
 | POST `/projects/:id/commands` | Существующий CommandEnvelope и domain planner |
+| POST `/projects/:id/leases` | Серверный planner готовит lease для того же CommandEnvelope; возвращает id/fence/TTL либо уже существующий receipt |
+| POST `/projects/:id/leases/:leaseId/renew`, DELETE `/projects/:id/leases/:leaseId` | Продлить/освободить собственный lease этой сессии; commandId и fence |
+| GET `/realtime/cursor`, GET `/realtime/events?after=N` | Авторитетный курсор перед snapshot и SSE метаданных ревизий MEDIUM; проверка сессии и membership на протяжении подписки |
 | GET `/people`, POST `/people/commands` | Каталог и PeopleEnvelope с его expectedRevision |
 | POST `/workspace/commands` | ArchiveProject (archived true/false), ReorderProjects (order), DuplicateProject (id, expectedProjectRevision); envelope как у создания, плюс command |
 | PUT `/projects/:id/view` | Устаревший совместимый endpoint: проверяет workspaceId/value и возвращает `{value}` с Deprecation; SQL не изменяет. V2.0C хранит вид локально в сессии вкладки |
@@ -87,6 +90,12 @@ auth, приглашения и гостевой обмен ограничены
 | DELETE `/invitations/:id`, DELETE `/members/:id` | Отзыв; участника отзывает owner, owner удалить нельзя |
 | GET/POST `/projects/:id/guest-links`, DELETE `/guest-links/:id` | Метаданные без токенов / выдача / отзыв. UI «Поделиться просмотром»; raw token только при выпуске |
 | POST `/guest/exchange`, GET `/guest/project` | Обмен token на часовую ограниченную cookie; только чтение, лимит 6 сессий |
+
+В V2.1B серверный интерфейс передаёт доказательство lease заголовками
+`X-Timeline-Lease` / `X-Timeline-Fence`, сохраняя исходные commandId и тело команды.
+Старый API без заголовков сохраняет строгий expectedRevision и проверяет занятость
+набора объектов внутри транзакции. Особенности realtime и обязательной миграции
+перед будущим серверным обновлением — в [STAGING](docs/STAGING.md#v21b-realtime-leases-и-будущее-обновление).
 
 Пример содержательной команды (UUID/ревизии берутся из ответов API):
 

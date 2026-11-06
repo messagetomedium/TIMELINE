@@ -84,6 +84,8 @@ jobs:
       - run: npm run build
       - run: npx playwright install --with-deps chromium webkit
       - run: npm run server:test
+        env:
+          TEST_PG_CONTAINER: ${{ job.services.postgres.id }}
   package:
     needs: changes
     if: needs.changes.outputs.package == 'true'

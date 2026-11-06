@@ -15,6 +15,7 @@ export function ServerApp(props: ServerProps) {
 function MemberApp({ resetToken, verified, accessLink }: ServerProps) {
   const [user, setUser] = useState<User | null>(null), [loading, setLoading] = useState(true), [error, setError] = useState("");
   const [member, setMember] = useState(false), [inviteToken, setInviteToken] = useState(accessLink?.token ?? null);
+  const [collaboration, setCollaboration] = useState(false);
   const [accepting, setAccepting] = useState(false), [inviteError, setInviteError] = useState("");
   const [loginOpen, setLoginOpen] = useState(false), [resetOpen, setResetOpen] = useState(!!resetToken);
   const load = async () => {
@@ -22,18 +23,19 @@ function MemberApp({ resetToken, verified, accessLink }: ServerProps) {
     try {
       const current = sessionSchema.parse(await requestApi("/api/auth/get-session"))?.user ?? null;
       let allowed = false;
+      let collaborative = false;
       if (current?.emailVerified) {
-        try { await requestApi("/api/v1/workspaces/current"); allowed = true; }
+        try { const capabilities = z.object({ collaboration: z.literal(1).optional() }).parse(await requestApi("/api/v1/workspaces/current")); allowed = true; collaborative = capabilities.collaboration === 1; }
         catch (e) { if (!(e instanceof ApiError && e.status === 403 && e.code === "MEMBERSHIP_REQUIRED")) throw e; }
       }
-      setUser(current); setMember(allowed);
+      setUser(current); setMember(allowed); setCollaboration(collaborative);
     }
     catch { setError("Не удалось проверить вход. Проверьте соединение с сервером."); }
     finally { setLoading(false); }
   };
   useEffect(() => { void Promise.resolve().then(load); }, []);
   const userId = user?.emailVerified && member ? user.id : null;
-  const service = useMemo(() => userId ? new RemoteCommandService(userId) : null, [userId]);
+  const service = useMemo(() => userId ? new RemoteCommandService(userId, undefined, undefined, collaboration) : null, [userId, collaboration]);
   if (loading) return <main className="workspace-loading" role="status">Проверяем вход…</main>;
   if (error) return <main className="workspace-loading"><p role="alert">{error}</p><button onClick={() => { void load(); }}>Повторить подключение</button></main>;
   const authenticated = async () => { await load(); setLoginOpen(false); setResetOpen(false); };
