@@ -18,14 +18,17 @@ export function useScrollRestoration(body: RefObject<HTMLDivElement | null>, ini
     const node = body.current;
     if (!node) return;
     let frame: number | undefined;
+    let applied: { y: number; height: number; contentHeight: number } | undefined;
     const schedule = () => {
       if (!done.current && frame === undefined) frame = requestAnimationFrame(apply);
     };
     const apply = () => {
       frame = undefined;
       if (done.current || node.clientHeight === 0) return;
+      if (!applied && node.scrollTop !== 0) { complete(); return; }
       const height = node.clientHeight, contentHeight = node.scrollHeight;
       const target = Math.max(0, Math.min(initialY, contentHeight - height));
+      applied = { y: target, height, contentHeight };
       node.scrollTop = target;
       // WebKit can clamp an early assignment during layout. Verify the actual
       // position and geometry on the next frame before enabling persistence.
@@ -39,12 +42,22 @@ export function useScrollRestoration(body: RefObject<HTMLDivElement | null>, ini
     const observer = new ResizeObserver(schedule);
     observer.observe(node);
     if (node.firstElementChild) observer.observe(node.firstElementChild);
+    const scrolled = () => {
+      // A different nonzero position with unchanged geometry is navigation, not
+      // our own scroll event or WebKit clamping against an unfinished layout.
+      if (node.scrollTop > 0 && (!applied || Math.abs(node.scrollTop - applied.y) >= 1
+        && node.clientHeight === applied.height && node.scrollHeight === applied.contentHeight)) complete();
+    };
+    node.addEventListener("scroll", scrolled, { passive: true });
     // Native scroll/pointer navigation must never be overwritten by a late restore.
     for (const event of ["wheel", "touchstart", "pointerdown", "keydown"]) node.addEventListener(event, complete, { passive: true });
-    schedule();
+    // When layout is already usable, restore in this layout effect: consumers
+    // must not observe an extra zero-position frame while data is ready.
+    apply();
     return () => {
       observer.disconnect();
       if (frame !== undefined) cancelAnimationFrame(frame);
+      node.removeEventListener("scroll", scrolled);
       for (const event of ["wheel", "touchstart", "pointerdown", "keydown"]) node.removeEventListener(event, complete);
     };
   }, [body, initialY, ready, restored, complete]);

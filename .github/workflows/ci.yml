@@ -48,7 +48,21 @@ jobs:
       - run: npm run build
       - run: npm run test
       # Browsers are preinstalled in the pinned container; keep the full E2E suite.
-      - run: npm run test:e2e
+      - run: |
+          set -o pipefail
+          npm run test:e2e 2>&1 | tee /tmp/timeline-playwright.log
+        shell: bash
+      - name: Browser failure details
+        if: failure()
+        run: |
+          node --input-type=module <<'NODE'
+          import { existsSync, readFileSync, appendFileSync } from 'node:fs';
+          const file = '/tmp/timeline-playwright.log';
+          if (existsSync(file)) {
+            const log = readFileSync(file, 'utf8').replace(/\u001b\[[0-9;]*m/g, '').split('\n').slice(-220).join('\n');
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### Playwright failure details\n\n\`\`\`text\n${log}\n\`\`\`\n`);
+          }
+          NODE
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

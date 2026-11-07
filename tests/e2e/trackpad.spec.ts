@@ -153,10 +153,10 @@ test("trackpad: portfolio pan and pinch persist locally without shifting project
   await wheel(viewport, 0, 24, { shiftKey: true }); await wheel(viewport, 0, 30); await wheel(viewport, 0, -15, { ctrlKey: true });
   await expect.poll(async () => (await camera(scene)).zoom).toBeGreaterThan(start.zoom);
   await page.waitForTimeout(200); const final = await camera(scene);
-  expect(await scene.locator('.portfolio-body').evaluate(el => el.scrollTop)).toBe(30);
+  await expect(scene.locator('.portfolio-body')).toHaveJSProperty("scrollTop", 30);
   expect(final.x).not.toBe(start.x);
   await page.reload(); await saved(page); expect(await camera(scene)).toEqual(final);
-  expect(await scene.locator('.portfolio-body').evaluate(el => el.scrollTop)).toBe(30);
+  await expect(scene.locator('.portfolio-body')).toHaveJSProperty("scrollTop", 30);
   expect(await documents(page)).toEqual([before]);
   // Switching mode before the idle timer fires must never restore stale "timeline" preferences.
   const x = (await camera(scene)).x; await wheel(viewport, 1, 0);
@@ -205,10 +205,18 @@ for (const mode of ["editor", "portfolio"] as const) {
       if (el.clientHeight !== 0) throw Error("Delayed layout fixture must not have a scroll viewport yet");
     });
     expect(await persistedY()).toBe(30);
-    await page.evaluate(() => { document.getElementById("delayed-scroll-layout")?.remove(); });
-    await expect(body).toHaveJSProperty("scrollTop", 30);
+    // Navigate immediately after the first accepted restore, before its next-frame
+    // verification. A late restore must not undo an already completed scroll.
+    await body.evaluate(el => {
+      const navigate = () => {
+        if (el.scrollTop !== 30) return;
+        el.removeEventListener("scroll", navigate);
+        el.scrollTop = 15;
+      };
+      el.addEventListener("scroll", navigate);
+      document.getElementById("delayed-scroll-layout")?.remove();
+    });
     expect(await camera(scene)).toEqual(final);
-    await body.evaluate(el => { el.scrollTop = 15; });
     await page.setViewportSize({ width: 1420, height: 500 });
     await expect.poll(persistedY).toBe(15);
     expect(await body.evaluate(el => el.scrollTop)).toBe(15);
