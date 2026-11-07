@@ -65,11 +65,22 @@ test("trackpad: diagonal pan, anchored pinch including result gaps, coalescing a
   const pan = c.x;
   const updates = await viewport.evaluate(async el => {
     const r = el.getBoundingClientRect();
-    let count = 0; const observer = new MutationObserver(records => { count += records.length; });
+    let count = 0, resolveFirst: (() => void) | undefined;
+    const firstChange = new Promise<void>(resolve => { resolveFirst = resolve; });
+    const observer = new MutationObserver(records => { count += records.length; resolveFirst?.(); });
     const scene = el.closest('main'); if (!scene) throw Error("Missing scene");
     observer.observe(scene, { attributes: true, attributeFilter: ['data-pan-x'] });
-    for (let i = 0; i < 40; i++) el.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, clientX: r.left + 100, clientY: r.top + 10, deltaX: .5, deltaY: .25 }));
-    await new Promise(resolve => setTimeout(resolve, 75)); observer.disconnect(); return count;
+    try {
+      for (let i = 0; i < 40; i++) el.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, clientX: r.left + 100, clientY: r.top + 10, deltaX: .5, deltaY: .25 }));
+      // WebKit can schedule its first frame beyond 75 ms on a busy CI runner.
+      // Wait for an actual camera mutation, then two frames to catch extra commits.
+      await Promise.race([
+        firstChange,
+        new Promise<never>((_, reject) => { setTimeout(() => { reject(Error("Batched pan produced no camera update")); }, 3000); }),
+      ]);
+      await new Promise<void>(resolve => { requestAnimationFrame(() => { requestAnimationFrame(() => { resolve(); }); }); });
+      return count;
+    } finally { observer.disconnect(); }
   });
   expect(updates).toBe(1);
   await expect.poll(async () => (await camera(scene)).x).toBeCloseTo(pan - 20, 5);
@@ -87,9 +98,26 @@ test("trackpad: diagonal pan, anchored pinch including result gaps, coalescing a
   }), before.project.id);
   await expect.poll(persistedY).toBe(y); // Prove that F5 starts with the nonzero saved preference.
   expect(await current(page)).toEqual(before);
+  await page.addInitScript(() => {
+    const NativeObserver = window.ResizeObserver, pending: (() => void)[] = [];
+    let released = false;
+    window.ResizeObserver = class extends NativeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        super((entries, observer) => {
+          if (!released && entries.some(entry => entry.target.classList.contains("calendar-time"))) pending.push(() => { callback(entries, observer); });
+          else callback(entries, observer);
+        });
+      }
+    };
+    (window as unknown as { releaseCalendarMeasurement: () => void }).releaseCalendarMeasurement = () => {
+      released = true; for (const notify of pending.splice(0)) notify();
+    };
+  });
   await page.reload(); await saved(page);
   expect((await camera(scene)).zoom).toBeCloseTo(final.zoom, 8); expect((await camera(scene)).x).toBeCloseTo(final.x, 8);
+  // Vertical layout is usable even when the calendar's width callback is delayed.
   await expect.poll(() => body.evaluate(el => el.scrollTop)).toBe(y);
+  await page.evaluate(() => { (window as unknown as { releaseCalendarMeasurement: () => void }).releaseCalendarMeasurement(); });
   expect(await persistedY()).toBe(y);
   const navigatedY = y - 15;
   await body.evaluate((el, next) => { el.scrollTop = next; }, navigatedY);
@@ -142,10 +170,10 @@ test("trackpad: portfolio pan and pinch persist locally without shifting project
   await wheel(viewport, 0, 24, { shiftKey: true }); await wheel(viewport, 0, 30); await wheel(viewport, 0, -15, { ctrlKey: true });
   await expect.poll(async () => (await camera(scene)).zoom).toBeGreaterThan(start.zoom);
   await page.waitForTimeout(200); const final = await camera(scene);
-  expect(await scene.locator('.portfolio-body').evaluate(el => el.scrollTop)).toBe(30);
+  await expect(scene.locator('.portfolio-body')).toHaveJSProperty("scrollTop", 30);
   expect(final.x).not.toBe(start.x);
   await page.reload(); await saved(page); expect(await camera(scene)).toEqual(final);
-  expect(await scene.locator('.portfolio-body').evaluate(el => el.scrollTop)).toBe(30);
+  await expect(scene.locator('.portfolio-body')).toHaveJSProperty("scrollTop", 30);
   expect(await documents(page)).toEqual([before]);
   // Switching mode before the idle timer fires must never restore stale "timeline" preferences.
   const x = (await camera(scene)).x; await wheel(viewport, 1, 0);
@@ -153,3 +181,62 @@ test("trackpad: portfolio pan and pinch persist locally without shifting project
   await page.getByRole("button", { name: "Карточки", exact: true }).click();
   await expect(scene).toHaveCount(0); await expect(page.locator('.saved-project-card')).toHaveCount(1);
 });
+
+for (const mode of ["editor", "portfolio"] as const) {
+  test(`trackpad: ${mode} restores the saved view after delayed scroll layout without saving zero`, async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 500 });
+    await create(page); const before = await current(page);
+    if (mode === "portfolio") {
+      await home(page); await page.getByRole("button", { name: "Таймлайн", exact: true }).click();
+    }
+    const selector = mode === "editor" ? ".timeline-body" : ".portfolio-body";
+    const scene = mode === "editor" ? page.getByRole("main", { name: "Редактор таймлайна" }) : page.getByLabel("Общий таймлайн проектов", { exact: true });
+    const body = page.locator(selector), viewport = scene.locator('.calendar-time');
+    const key = mode === "editor" ? `editor:${before.project.id}` : "workspace";
+    const persistedY = () => page.evaluate(key => new Promise<number>((resolve, reject) => {
+      const request = indexedDB.open("timeline-workspace-v2");
+      request.onerror = () => { reject(Error("Preferences DB unavailable")); };
+      request.onsuccess = () => {
+        const db = request.result, read = db.transaction("preferences").objectStore("preferences").get(key);
+        read.onerror = () => { db.close(); reject(Error("Preferences read failed")); };
+        read.onsuccess = () => {
+          const row = read.result as { value?: { cameraY?: number; portfolio?: { cameraY?: number } } } | undefined;
+          db.close(); resolve(row?.value?.cameraY ?? row?.value?.portfolio?.cameraY ?? -1);
+        };
+      };
+    }), key);
+    await wheel(viewport, 24, 30); await wheel(viewport, 0, -15, { ctrlKey: true });
+    await expect(body).toHaveJSProperty("scrollTop", 30);
+    await expect.poll(persistedY).toBe(30);
+    const final = await camera(scene);
+    // Calendar width is measurable while the scroll viewport is still unlaid out.
+    // This deterministically exposes the Safari race instead of extending timeouts.
+    await page.addInitScript(selector => {
+      const style = document.createElement("style"); style.id = "delayed-scroll-layout";
+      style.textContent = `${selector} { display: none !important; }`;
+      document.addEventListener("DOMContentLoaded", () => { document.head.append(style); }, { once: true });
+    }, selector);
+    await page.reload(); await saved(page); await expect(body).toBeAttached();
+    await body.evaluate(async el => {
+      await new Promise<void>(resolve => { requestAnimationFrame(() => { requestAnimationFrame(() => { resolve(); }); }); });
+      if (el.clientHeight !== 0) throw Error("Delayed layout fixture must not have a scroll viewport yet");
+    });
+    expect(await persistedY()).toBe(30);
+    // Navigate immediately after the first accepted restore, before its next-frame
+    // verification. A late restore must not undo an already completed scroll.
+    await body.evaluate(el => {
+      const navigate = () => {
+        if (el.scrollTop !== 30) return;
+        el.removeEventListener("scroll", navigate);
+        el.scrollTop = 15;
+      };
+      el.addEventListener("scroll", navigate);
+      document.getElementById("delayed-scroll-layout")?.remove();
+    });
+    expect(await camera(scene)).toEqual(final);
+    await page.setViewportSize({ width: 1420, height: 500 });
+    await expect.poll(persistedY).toBe(15);
+    expect(await body.evaluate(el => el.scrollTop)).toBe(15);
+    expect(await documents(page)).toEqual([before]);
+  });
+}

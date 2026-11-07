@@ -1,3 +1,4 @@
+import { ProcessColor } from "./ProcessColor";
 import { occupancy } from "../../domain/v2/occupancy";
 import { checkpointScene } from "../../domain/v2/checkpointLayout";
 import { AssignmentControl } from "./PeopleUI";
@@ -11,7 +12,7 @@ import { ProjectRangeEditor } from "./ProjectRangeEditor";
 import { DateRangeEditor } from "./DateRangeEditor";
 import { WorkActions, CreateWorkForm } from "./WorkActions";
 import type { WorkKind } from "../../domain/v2/work";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { addDays } from "../../domain";
 import { displayDocument, checkpointDate } from "../../domain/v2/model";
 import type { Snapshot } from "../../domain/v2/model";
@@ -140,8 +141,10 @@ export function FoundationTimeline({
               checkpointDate(scene ?? snapshot, c),
             ),
           }),
-          stageHeight: (camera, width, scene) =>
-            68 + checkpointScene(scene ?? snapshot, camera, width).height,
+          stageHeight: () => 68,
+          checkpointHeight: (camera,width,scene) => checkpointScene(scene ?? snapshot,camera,width).height,
+          checkpointRuler: (camera,width,preview,start) => <CheckpointHeaders snapshot={preview ?? snapshot} camera={camera} width={width}
+            onSelect={id => { setSpecial({ kind: "checkpoint", id }); }} onStart={start} />,
           onCreate: create,
           inspectorCollapsed,
           onToggleInspector,
@@ -252,7 +255,7 @@ export function FoundationTimeline({
           onSelect: () => {
             setSpecial(null);
           },
-          stages: (camera, width, preview, start, checkpointStart) => {
+          stages: (camera, width, preview, start) => {
             const scene = preview ?? snapshot,
               stages = [...scene.stages].sort(
                 (a, b) => a.sortIndex - b.sortIndex,
@@ -262,7 +265,7 @@ export function FoundationTimeline({
                 style={
                   {
                     height: "100%",
-                    "--checkpoint-header-height": `${String(checkpointScene(scene, camera, width).height)}px`,
+                    "--checkpoint-header-height": "0px",
                   } as import("react").CSSProperties
                 }
                 className="stage-band foundation-stage-band"
@@ -277,15 +280,6 @@ export function FoundationTimeline({
                   }}
                   camera={camera}
                   height="100%"
-                />
-                <CheckpointHeaders
-                  snapshot={scene}
-                  camera={camera}
-                  width={width}
-                  onSelect={(id) => {
-                    setSpecial({ kind: "checkpoint", id });
-                  }}
-                  onStart={checkpointStart}
                 />
                 {stages.map((s, i) => {
                   const left = xForDate(s.startDate, camera);
@@ -533,7 +527,7 @@ function FoundationInspector({
       data-selected-id={target.id}
     >
       <div className="inspector-top">
-        <p className="inspector-kicker">СВОЙСТВА</p>
+        <p className="inspector-kicker">подробности:</p>
         <span className="inspector-type">{labels[target.kind]}</span>
       </div>
       {target.kind !== "result" && (
@@ -581,19 +575,11 @@ function FoundationInspector({
           удаления или копирования выберите одну работу.
         </p>
       )}
-      {(target.kind === "process" || target.kind === "task") && count <= 1 && (
-        <WorkActions
-          snapshot={snapshot}
-          kind={target.kind}
-          id={target.id}
-          onCommand={onCommand}
-          onCreate={onCreate}
-        />
-      )}
       {(target.kind === "process" || target.kind === "task") &&
         item &&
         "status" in item && (
           <>
+            <div className="inspector-parameters">
             <label className="inspector-checkbox">
               <input type="checkbox" checked={!item.isActive} onKeyDown={checkboxEnter} onChange={(e) => { void onCommand({ type: "SetWorkActive", kind: target.kind, id: target.id, value: !e.target.checked }); }} />
               Неактивно
@@ -650,13 +636,13 @@ function FoundationInspector({
             />
             {target.kind === "process" && "color" in item && (
               <ProcessColor
-                key={item.color}
                 value={item.color}
                 onCommit={(color) =>
                   onCommand({ type: "SetProcessColor", id: target.id, color })
                 }
               />
             )}
+            </div>
             <AssignmentControl
               key={`${target.id}:${snapshot.assignments.find((a) => a.targetId === target.id)?.id ?? "none"}`}
               snapshot={snapshot}
@@ -795,6 +781,17 @@ function FoundationInspector({
         <ProjectRangeEditor key={`project-range:${target.id}`} snapshot={snapshot} onCommand={onCommand} />
       )}
 
+      <div className="inspector-actions">
+      {(target.kind === "process" || target.kind === "task") && count <= 1 && (
+        <WorkActions
+          snapshot={snapshot}
+          kind={target.kind}
+          id={target.id}
+          onCommand={onCommand}
+          onCreate={onCreate}
+        />
+      )}
+      </div>
       <p className="inspector-note">
         {serverMode ? "Работы толкают соседей в своей строке. Один жест — одна команда." : "Работы толкают соседей в своей строке. Один жест — одна отмена."}
       </p>
@@ -868,66 +865,4 @@ function checkboxEnter(e: React.KeyboardEvent<HTMLInputElement>) {
     e.stopPropagation();
     if (!e.repeat) e.currentTarget.click();
   }
-}
-
-function ProcessColor({
-  value,
-  onCommit,
-}: {
-  value: string;
-  onCommit: (color: string) => Promise<boolean>;
-}) {
-  const [draft, setDraft] = useState(value),
-    sent = useRef(value),
-    cancelled = useRef(false);
-  const node = useRef<HTMLInputElement>(null);
-  const commit = (next = draft) => {
-    if (!cancelled.current && next !== sent.current) {
-      sent.current = next;
-      void onCommit(next).then((ok) => {
-        if (!ok) {
-          sent.current = value;
-          setDraft(value);
-        }
-      });
-    }
-  };
-  useEffect(() => {
-    const input = node.current;
-    const change = () => { if (input) commit(input.value); };
-    input?.addEventListener("change", change);
-    return () => input?.removeEventListener("change", change);
-  });
-  return (
-    <label className="inspector-label color-field">
-      Цвет процесса
-      <input
-        ref={node}
-        aria-label="Цвет процесса"
-        type="color"
-        value={draft}
-        onChange={(e) => {
-          cancelled.current = false;
-          setDraft(e.target.value);
-        }}
-        onBlur={() => { commit(); }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            e.stopPropagation();
-            commit();
-            e.currentTarget.blur();
-          }
-          if (e.key === "Escape") {
-            e.preventDefault();
-            e.stopPropagation();
-            cancelled.current = true;
-            setDraft(value);
-            e.currentTarget.blur();
-          }
-        }}
-      />
-      <small>Enter или клик вне поля — применить; Esc — отменить</small>
-    </label>
-  );
 }

@@ -31,6 +31,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
+    # Pinned Playwright image supplies Chromium, WebKit and OS dependencies.
+    # Avoid slow apt downloads on ephemeral runners (previous install-deps timed out).
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.1-noble
     steps:
       - uses: actions/checkout@v4
         with:
@@ -43,22 +47,22 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm run test
-      # Browser binaries survive across ephemeral GitHub runners via cache.
-      # OS libraries are installed separately: apt dependencies cannot be cached.
-      - name: Cache Playwright browsers
-        id: playwright-cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
-      - name: Install Playwright system dependencies
-        run: npx playwright install-deps chromium webkit
-        timeout-minutes: 8
-      - name: Download Playwright browsers only on cache miss
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: npx playwright install chromium webkit
-        timeout-minutes: 8
-      - run: npm run test:e2e
+      # Browsers are preinstalled in the pinned container; keep the full E2E suite.
+      - run: |
+          set -o pipefail
+          npm run test:e2e 2>&1 | tee /tmp/timeline-playwright.log
+        shell: bash
+      - name: Browser failure details
+        if: failure()
+        run: |
+          node --input-type=module <<'NODE'
+          import { existsSync, readFileSync, appendFileSync } from 'node:fs';
+          const file = '/tmp/timeline-playwright.log';
+          if (existsSync(file)) {
+            const log = readFileSync(file, 'utf8').replace(/\u001b\[[0-9;]*m/g, '').split('\n').slice(-220).join('\n');
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### Playwright failure details\n\n\`\`\`text\n${log}\n\`\`\`\n`);
+          }
+          NODE
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
@@ -69,6 +73,12 @@ jobs:
     needs: changes
     if: needs.changes.outputs.server == 'true'
     runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.1-noble
+      # The restore regression still runs pg_dump/psql inside the PG17 service.
+      # Mount the CLI without apt; Actions already mounts /var/run/docker.sock.
+      volumes:
+        - /usr/bin/docker:/usr/bin/docker:ro
     services:
       postgres:
         image: postgres:17
@@ -76,13 +86,11 @@ jobs:
           POSTGRES_DB: timeline_server_test
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: isolated-ci-test-only
-        ports:
-          - 5432:5432
         options: >-
           --health-cmd "pg_isready -U postgres -d timeline_server_test"
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
-      TEST_DATABASE_URL: postgresql://postgres:isolated-ci-test-only@127.0.0.1:5432/timeline_server_test
+      TEST_DATABASE_URL: postgresql://postgres:isolated-ci-test-only@postgres:5432/timeline_server_test
     steps:
       - uses: actions/checkout@v4
         with:
@@ -96,21 +104,7 @@ jobs:
         if: needs.changes.outputs.frontend != 'true'
       - run: npm run server:typecheck
       - run: npm run build
-      # Browser binaries survive across ephemeral GitHub runners via cache.
-      # OS libraries are installed separately: apt dependencies cannot be cached.
-      - name: Cache Playwright browsers
-        id: playwright-cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
-      - name: Install Playwright system dependencies
-        run: npx playwright install-deps chromium webkit
-        timeout-minutes: 8
-      - name: Download Playwright browsers only on cache miss
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: npx playwright install chromium webkit
-        timeout-minutes: 8
+      # Both browser engines and their OS libraries are supplied by the image.
       - run: npm run server:test
         env:
           TEST_PG_CONTAINER: ${{ job.services.postgres.id }}

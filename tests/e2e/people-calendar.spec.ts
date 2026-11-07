@@ -206,7 +206,7 @@ test("range popup clears endpoints independently, normalizes reverse picks, navi
   await undo(page);
   expect(semantic(await current(page))).toBe(semantic(before));
 });
-test("actual top checkpoint circle drags without pan, previews only, cancels and restores after reload", async ({
+test("checkpoint marker between processes and people drags without pan, previews only, cancels and restores after reload", async ({
   page,
 }) => {
   await page.getByLabel("Шаг", { exact: true }).selectOption("1d");
@@ -219,11 +219,21 @@ test("actual top checkpoint circle drags without pan, previews only, cancels and
       exact: true,
     }),
     h = await box(handle),
-    body = await box(page.getByLabel("Производственный план"));
-  expect(h.y + h.height).toBeLessThan(body.y);
-  expect(await handle.evaluate((e) => getComputedStyle(e).borderRadius)).toBe(
-    "50%",
-  );
+    body = await box(page.getByLabel("Производственный план")),
+    row = await box(page.locator(".checkpoint-row")),
+    people = await box(page.locator(".performers-section"));
+  await expect(page.locator(".checkpoint-row").getByRole("button", { name: "Чекпойнт: Дедлайн", exact: true })).toBeVisible();
+  expect(body.y + body.height).toBeLessThanOrEqual(row.y);
+  expect(row.y + row.height).toBeLessThanOrEqual(people.y);
+  expect(h.y).toBeGreaterThanOrEqual(row.y);
+  expect(h.y + h.height).toBeLessThanOrEqual(row.y + row.height);
+  const marker = await handle.evaluate(e => {
+    const style = getComputedStyle(e), transform = new DOMMatrixReadOnly(style.transform);
+    return { radius: style.borderRadius, color: style.backgroundColor, angle: Math.atan2(transform.b, transform.a) * 180 / Math.PI };
+  });
+  expect(marker.radius).toBe("2px");
+  expect(marker.color).toBe("rgb(0, 0, 0)");
+  expect(marker.angle).toBeCloseTo(45, 5);
   await drag(page, handle, 2 * (await scale(page)), false);
   await expect(handle).toHaveAttribute("data-date", "2026-11-17");
   expect(await current(page)).toEqual(before);
@@ -305,8 +315,8 @@ test("project and checkpoint day fills share all temporal layers, exclude result
         .locator("[data-stage-result-header]")
         .evaluateAll((es) =>
           es.map((e) => ({
-            x: (e as HTMLElement).offsetLeft,
-            w: (e as HTMLElement).offsetWidth,
+            x: e.getBoundingClientRect().x,
+            w: e.getBoundingClientRect().width,
           })),
         );
     for (const selector of [
@@ -319,18 +329,25 @@ test("project and checkpoint day fills share all temporal layers, exclude result
       await expect(fills).toHaveCount(2);
       const geometry = await fills.evaluateAll((es) =>
         es.map((e) => ({
-          x: Number(e.getAttribute("x")),
-          w: Number(e.getAttribute("width")),
+          x: e.getBoundingClientRect().x,
+          w: e.getBoundingClientRect().width,
         })),
       );
       expect(geometry.reduce((s, f) => s + f.w, 0)).toBeCloseTo(14 * px, 2);
-      for (const f of geometry)
-        for (const g of gaps)
-          expect(f.x + f.w <= g.x + 0.1 || f.x >= g.x + g.w - 0.1).toBe(true);
+      // SVG x is local and offsetLeft rounds to integer pixels. DOMRects keep
+      // all layers in viewport CSS pixels, including fractional gap boundaries.
+      const expectOutsideGaps = (rects: readonly { x: number; w: number }[]) => {
+        for (const f of rects)
+          for (const g of gaps)
+            expect(f.x + f.w <= g.x + 0.1 || f.x >= g.x + g.w - 0.1,
+              JSON.stringify({ layer: selector, fill: f, gap: g, coordinates: "viewport CSS pixels" })).toBe(true);
+      };
+      expectOutsideGaps(geometry);
       const red = page.locator(selector).locator(".checkpoint-day-shade");
       await expect(red).toHaveCount(1);
       await expect(red).toHaveAttribute("data-date", "2026-11-15");
       expect(Number(await red.getAttribute("width"))).toBeCloseTo(px, 2);
+      expectOutsideGaps(await red.evaluateAll(es => es.map(e => ({ x: e.getBoundingClientRect().x, w: e.getBoundingClientRect().width }))));
     }
   };
   await check();
@@ -646,31 +663,20 @@ test("work inspector saves finished date edits with cascade and persistent histo
   const beforeColor=await current(page);
   const process = required(beforeColor.processes[0]);
   await entity(page, process.id).click();
-  const color = page.getByLabel("Цвет процесса", { exact: true });
-  const preview = async (value: string) => {
-    await color.evaluate((el, value) => {
-      Object.getOwnPropertyDescriptor(
-        HTMLInputElement.prototype,
-        "value",
-      )?.set?.call(el, value);
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-    }, value);
-  };
-  await color.focus();
-  await preview("#224466");
-  await preview("#334477");
+  const color = page.getByRole("button", { name: "Цвет процесса", exact: true });
+  await color.click();
+  await expect(page.locator('input[type="color"]')).toHaveCount(0);
   expect(await current(page)).toEqual(beforeColor);
   await color.press("Escape");
   expect(await current(page)).toEqual(beforeColor);
-  await color.focus();
-  await preview("#445588");
-  await preview("#556699");
-  await color.dispatchEvent("change");
+  await color.click();
+  await page.getByRole("button", { name: "Голубой", exact: true }).click();
   await saved(page);
   const colored = await current(page);
-  expect(required(colored.processes[0]).color).toBe("#556699");
+  expect(required(colored.processes[0]).color).toBe("#91CFF5");
   expect(colored.project.revision).toBe(beforeColor.project.revision + 1);
-  await color.press("Enter");
+  await color.click();
+  await page.getByRole("button", { name: "Голубой", exact: true }).press("Enter");
   await saved(page);
   expect(await current(page)).toEqual(colored);
   await page.reload();

@@ -5,6 +5,8 @@ import { RemoteCommandService } from "../infrastructure/remote/RemoteCommandServ
 import { ApiError, requestApi } from "../infrastructure/remote/ApiClient";
 import type { AccessLink } from "./accessLink";
 import { GuestView } from "./GuestView";
+import { Welcome } from "./Welcome";
+import { FolderShape } from "../features/ui/FolderShape";
 
 const sessionSchema = z.object({ user: z.object({ id: z.string().min(1), email: z.email(), emailVerified: z.boolean() }) }).nullable();
 type User = NonNullable<z.infer<typeof sessionSchema>>["user"];
@@ -18,6 +20,7 @@ function MemberApp({ resetToken, verified, accessLink }: ServerProps) {
   const [collaboration, setCollaboration] = useState(false);
   const [accepting, setAccepting] = useState(false), [inviteError, setInviteError] = useState("");
   const [loginOpen, setLoginOpen] = useState(false), [resetOpen, setResetOpen] = useState(!!resetToken);
+  const [authScreen, setAuthScreen] = useState<"welcome" | "login" | "register">(verified || accessLink || resetToken ? "login" : "welcome");
   const load = async () => {
     setLoading(true); setError("");
     try {
@@ -40,7 +43,7 @@ function MemberApp({ resetToken, verified, accessLink }: ServerProps) {
   if (error) return <main className="workspace-loading"><p role="alert">{error}</p><button onClick={() => { void load(); }}>Повторить подключение</button></main>;
   const authenticated = async () => { await load(); setLoginOpen(false); setResetOpen(false); };
   const logout = async () => {
-    try { await requestApi("/api/auth/sign-out", "POST", {}); setUser(null); }
+    try { await requestApi("/api/auth/sign-out", "POST", {}); setUser(null); setAuthScreen("welcome"); }
     catch { setError("Не удалось выйти. Повторите подключение."); }
   };
   return <>
@@ -58,12 +61,15 @@ function MemberApp({ resetToken, verified, accessLink }: ServerProps) {
         <button onClick={() => { void load(); }}>Проверить доступ</button><button onClick={() => { void logout(); }}>Выйти</button>
         {accessLink?.kind === "invite" && <p>Ссылка недоступна в этой вкладке. Откройте исходное приглашение ещё раз.</p>}
       </main> : null}
-    {(!user?.emailVerified || loginOpen || resetOpen) && <AuthForm invitation={!!inviteToken} initial={resetOpen ? "reset" : "login"} resetToken={resetToken ?? ""} verified={verified} onSuccess={authenticated} onResetDone={() => { setResetOpen(false); }} />}
+    {(!user?.emailVerified || loginOpen || resetOpen) && (authScreen === "welcome" && !loginOpen && !resetOpen && !inviteToken
+      ? <Welcome onLogin={() => { setAuthScreen("login"); }} onRegister={() => { setAuthScreen("register"); }} />
+      : <AuthForm invitation={!!inviteToken} initial={resetOpen ? "reset" : authScreen === "register" ? "register" : "login"} resetToken={resetToken ?? ""} verified={verified} onSuccess={authenticated}
+        overlay={!!service} onHome={() => { setAuthScreen("welcome"); if (service) setLoginOpen(false); }} onResetDone={() => { setResetOpen(false); }} />)}
   </>;
 }
 function formText(data: FormData, key: string) { const value = data.get(key); return typeof value === "string" ? value : ""; }
-function AuthForm({ initial, resetToken, verified, onSuccess, onResetDone, invitation }: {
-  initial: "login" | "reset"; resetToken: string; verified: boolean; onSuccess: () => Promise<void>; onResetDone: () => void; invitation: boolean;
+function AuthForm({ initial, resetToken, verified, onSuccess, onResetDone, invitation, overlay, onHome }: {
+  initial: "login" | "register" | "reset"; resetToken: string; verified: boolean; onSuccess: () => Promise<void>; onResetDone: () => void; invitation: boolean; overlay: boolean; onHome: () => void;
 }) {
   const [mode, setMode] = useState<"login" | "register" | "forgot" | "reset">(initial);
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [notice, setNotice] = useState(verified ? "Email подтверждён. Войдите в аккаунт." : "");
@@ -93,25 +99,29 @@ function AuthForm({ initial, resetToken, verified, onSuccess, onResetDone, invit
         : "Не удалось подтвердить отправку. Проверьте поля; сервис почты может быть временно недоступен. Повторите позже или сообщите администратору.");
     } finally { setBusy(false); }
   };
-  return <section className="modal-backdrop"><form className="workspace-dialog" aria-label="Доступ к TIMELINE" onSubmit={(e) => {
+  return <section className={`pl-auth-page${overlay ? " modal-backdrop" : ""}`} aria-label="Авторизация PLINE"><div className="pl-auth-composition">
+    <button type="button" className="pl-wordmark auth-wordmark" aria-label="PLINE — на старт" onClick={onHome}>PLINE</button>
+    <form id="pline-auth" className="workspace-dialog pl-auth-folder" aria-label="Доступ к PLINE" onSubmit={(e) => {
     e.preventDefault(); if (!busy) void submit(new FormData(e.currentTarget));
   }}>
-    <h1>{mode === "login" ? "Вход в TIMELINE" : mode === "register" ? "Регистрация" : mode === "forgot" ? "Восстановление доступа" : "Новый пароль"}</h1>
-    <p className="inspector-note">Серверный режим · данные рабочего пространства в PostgreSQL. Локальные проекты браузера сохранены отдельно.</p>
+    <FolderShape />
+    <h1>{mode === "login" ? "Вход в аккаунт" : mode === "register" ? "Регистрация" : mode === "forgot" ? "Восстановление доступа" : "Новый пароль"}</h1>
     {invitation && <p>Подтвердите email в другой вкладке, затем вернитесь сюда и войдите, чтобы принять приглашение. После обновления страницы откройте исходное приглашение снова.</p>}
     {notice && <p role="status">{notice}</p>}{error && <p className="workspace-error" role="alert">{error}</p>}
     {mode === "register" && <label>Имя<input name="name" autoComplete="name" required maxLength={200} disabled={busy} /></label>}
     {mode !== "reset" && <label>Email<input name="email" type="email" autoComplete="email" required value={email} onChange={(e) => { setEmail(e.target.value); }} disabled={busy} /></label>}
     {mode !== "forgot" && <label>Пароль<input key={mode} name="password" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} required minLength={mode === "login" ? 1 : 12} maxLength={128} disabled={busy} /></label>}
+    {mode === "login" && <button className="auth-forgot" type="button" disabled={busy} onClick={() => { setMode("forgot"); setError(""); }}>Забыли пароль?</button>}
     <button className="primary-button" type="submit" disabled={busy}>{busy ? "Подождите…" : mode === "login" ? "Войти" : mode === "register" ? "Зарегистрироваться" : mode === "forgot" ? "Отправить ссылку" : "Изменить пароль"}</button>
     <div className="dialog-footer">
       {mode !== "login" && <button type="button" disabled={busy} onClick={() => { setMode("login"); setError(""); onResetDone(); }}>К входу</button>}
-      {mode === "login" && <><button type="button" disabled={busy} onClick={() => { setMode("register"); setError(""); }}>Создать аккаунт</button><button type="button" disabled={busy} onClick={() => { setMode("forgot"); setError(""); }}>Забыли пароль?</button></>}
     </div>
     {mode === "login" && <button type="button" disabled={busy || !z.email().safeParse(email).success} onClick={() => {
       setBusy(true); setError("");
       void requestApi("/api/auth/send-verification-email", "POST", { email, callbackURL: `${location.origin}/?auth=verified` })
         .then(() => { setNotice("Если требуется подтверждение, запрос принят. Проверьте почту; доставка письма не подтверждена."); }).catch(() => { setError("Не удалось подтвердить отправку. Сервис почты может быть недоступен; повторите позже или сообщите администратору."); }).finally(() => { setBusy(false); });
     }}>Повторить письмо подтверждения</button>}
-  </form></section>;
+  </form>
+  {mode === "login" && <button className="auth-register" type="button" aria-label="Создать аккаунт" disabled={busy} onClick={() => { setMode("register"); setError(""); }}>регистрация</button>}
+  </div></section>;
 }

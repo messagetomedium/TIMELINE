@@ -42,6 +42,8 @@ export interface FoundationUI {
   range:()=>import('../../domain').DateInterval;
   area:(scene:Snapshot|undefined)=>CalendarArea;
   stageHeight:(camera:TimelineCamera,width:number,scene:Snapshot|undefined)=>number;
+  checkpointHeight?: (camera:TimelineCamera,width:number,scene:Snapshot|undefined)=>number;
+  checkpointRuler?: (camera:TimelineCamera,width:number,scene:Snapshot|undefined,start:(e:PointerEvent,id:string,date:import('../../domain').DateOnly)=>void)=>ReactNode;
   onCreate:(kind:'process'|'task',parent:string|null)=>void;
   inspectorCollapsed:boolean;
   onToggleInspector:()=>void;
@@ -164,8 +166,7 @@ export function TimelineWorkspace({ document, onCommit, initialView, onViewChang
     <div className={`timeline-surface ${gesture.active ? `gesture-${gesture.active}` : navigation.active ? 'gesture-pan' : ''} ${gesture.invalid ? 'invalid-gesture' : ''}`} ref={surface} onPointerDownCapture={navigation.onPointerDownCapture}
       onPointerDown={gesture.startPan} onPointerMove={gesture.onPointerMove} onPointerUp={gesture.onPointerUp} onPointerCancel={gesture.onPointerCancel} onLostPointerCapture={gesture.onLostPointerCapture}>
       <header className="editor-heading" data-interactive>
-        <div><p className="eyebrow">Рабочий проект</p><h1 title={document.project.name}>{document.project.name}</h1></div>
-        <DateRange value={document.project} />
+        <div><p className="eyebrow">рабочий проект</p><h1 title={document.project.name}>{document.project.name}</h1><div className="project-dates">даты реализации: <DateRange value={document.project} /></div></div>
       </header>
       <div className="calendar-row"><div className="calendar-gutter section-gutter" data-interactive><strong>Календарь</strong><span>{visibleYears(calendar.range)}</span></div>
         <div className="calendar-time" ref={timeViewport}><CalendarRuler camera={sceneCamera} width={width} calendar={calendar} today={today} area={area}/></div>
@@ -175,7 +176,7 @@ export function TimelineWorkspace({ document, onCommit, initialView, onViewChang
       </div>
       <div className="timeline-body" ref={body} aria-label="Производственный план" onScroll={onScroll}>
         <div className="timeline-body-layout" style={{ height: bodyHeight }}>
-        <div className="section-gutter production-gutter" data-interactive><div><strong>Процессы</strong><small>{document.processes.length} процессов · {document.tasks.length} задачи</small><button className="add-work-button" onClick={() => { if(foundation)foundation.onCreate('process',activeProcess?.id??null);else setCreating('process'); }}>+ Процесс</button>{activeProcess && <button className="add-work-button" onClick={() => { if(foundation)foundation.onCreate('task',activeProcess.id);else setCreating('task'); }}>+ Задача</button>}</div></div>
+        <div className="section-gutter production-gutter" data-interactive><div><strong>ПРОЦЕССЫ</strong><small>{document.processes.length} процессов · {document.tasks.length} задачи</small><button className="add-work-button" onClick={() => { if(foundation)foundation.onCreate('process',activeProcess?.id??null);else setCreating('process'); }}>+ Процесс</button>{activeProcess && <button className="add-work-button" onClick={() => { if(foundation)foundation.onCreate('task',activeProcess.id);else setCreating('task'); }}>+ Задача</button>}</div></div>
         <div className="timeline-canvas" style={{ height: bodyHeight }}>
           {showResults && foundation?.results(sceneCamera,gesture.snapshot,layout)}
           <TimeGrid camera={sceneCamera} width={width} height={bodyHeight} calendar={calendar} weekends={weekends} area={area}/>
@@ -199,6 +200,7 @@ export function TimelineWorkspace({ document, onCommit, initialView, onViewChang
         </div>
         </div>
       </div>
+      {foundation?.checkpointRuler && <div className="calendar-row checkpoint-row" style={{height:Math.max(32,foundation.checkpointHeight?.(sceneCamera,width,gesture.snapshot)??32)}}><div className="section-gutter">Контрольные даты</div><div className="checkpoint-ruler">{foundation.checkpointRuler(sceneCamera,width,gesture.snapshot,gesture.startCheckpoint)}</div></div>}
       {foundation?.people?foundation.people({camera:sceneCamera,width,calendar,weekends,today,hovered,onHover:setHovered},gesture.snapshot):<PerformersSection document={sceneDocument} camera={sceneCamera} width={width} calendar={calendar} weekends={weekends} today={today} hovered={hovered} onHover={setHovered} />}
       <div className="toolbar-dock" data-interactive>
         <div className="floating-toolbar" role="toolbar" aria-label="Вид таймлайна">
