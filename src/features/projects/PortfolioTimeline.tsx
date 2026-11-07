@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent } from 'react';
 import { addDays, daysBetween, gridStepSchema } from '../../domain';
 import type { ProjectDocument, ProjectId } from '../../domain';
@@ -11,6 +11,7 @@ import type { PortfolioPreferences } from '../../application/workspace/model';
 import { CalendarRuler, TimeGrid } from '../timeline/CalendarLayers';
 import { useLocalToday } from '../timeline/useLocalToday';
 import { useCanvasNavigation } from '../timeline/useCanvasNavigation';
+import { useScrollRestoration } from '../timeline/useScrollRestoration';
 import { formatDate } from './formatDate';
 import { ProjectActions } from './ProjectActions';
 import type { ProjectActionProps } from './ProjectActions';
@@ -41,7 +42,6 @@ export function PortfolioTimeline({ documents, preferences, onPreferences, onOpe
   const viewport = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLDivElement>(null);
   const initialized = useRef(false);
-  const scrollRestored = useRef(false);
   const [viewReady, setViewReady] = useState(false);
   const [initialCameraY] = useState(() => preferences.cameraY ?? 0);
   const gesture = useRef<Gesture | null>(null);
@@ -56,7 +56,8 @@ export function PortfolioTimeline({ documents, preferences, onPreferences, onOpe
   const navigateCamera = (value: TimelineCamera) => { setLocalCamera({ source: preferences.camera, value }); };
   const navigation = useCanvasNavigation({ surface, viewport, body, camera, setCamera: navigateCamera,
     blocked: () => gesture.current !== null || rowDrag.current !== null, startPan: e => { begin(e, null); },
-    onIdle: (next, cameraY) => { if (next !== preferences.camera || cameraY !== (preferences.cameraY ?? 0)) onPreferences({ ...preferences, camera: next, cameraY }); } });
+    onIdle: (next, cameraY) => { if (scrollRestored && (next !== preferences.camera || cameraY !== (preferences.cameraY ?? 0))) onPreferences({ ...preferences, camera: next, cameraY }); } });
+  const scrollRestored = useScrollRestoration(body, initialCameraY, viewReady, navigation.active || previewCamera !== null || previewDocument !== null || rowOrder !== null);
   const calendar = getCalendarGeometry(getVisibleDateRange(width, camera), preferences.step);
   const height = Math.max(360, documents.length * 64 + 64);
 
@@ -72,22 +73,13 @@ export function PortfolioTimeline({ documents, preferences, onPreferences, onOpe
           const next = cameraForFocusDate({ originDate: focus, pxPerDay: WORK_ZOOM, panX: 0 }, focus, entry.contentRect.width, 0.32);
           setLocalCamera({ source: preferences.camera, value: next }); onPreferences({ ...preferences, camera: next });
         }
-        // First commit the measured width, then restore scroll after layout.
+        // Scroll restoration separately observes the body's actual layout.
         setViewReady(true);
       }
     });
     observer.observe(element);
     return () => { observer.disconnect(); };
   }, [focus, preferences, onPreferences]);
-  useLayoutEffect(() => {
-    if (!viewReady || scrollRestored.current) return;
-    const element = body.current;
-    if (!element) return;
-    // Safari may clamp scrollTop to zero before the portfolio's flex layout is ready.
-    // Apply the initial local view once, after the measurement-triggered React commit.
-    scrollRestored.current = true;
-    if (element.scrollTop === 0) element.scrollTop = initialCameraY;
-  }, [viewReady, initialCameraY]);
 
   const cancel = useCallback(() => {
     const orderGesture = rowDrag.current;
@@ -154,7 +146,7 @@ export function PortfolioTimeline({ documents, preferences, onPreferences, onOpe
     cancel();
     if (surface.current?.hasPointerCapture(event.pointerId)) surface.current.releasePointerCapture(event.pointerId);
   };
-  const setCamera = (next: TimelineCamera) => { navigateCamera(next); onPreferences({ ...preferences, camera: next, cameraY: body.current?.scrollTop ?? 0 }); };
+  const setCamera = (next: TimelineCamera) => { navigateCamera(next); onPreferences({ ...preferences, camera: next, cameraY: scrollRestored ? body.current?.scrollTop ?? 0 : initialCameraY }); };
   return <section className={`portfolio timeline-surface${navigation.active ? ' gesture-pan' : ''}`} aria-label="Общий таймлайн проектов" ref={surface} data-px-per-day={camera.pxPerDay} data-pan-x={camera.panX} onPointerDownCapture={navigation.onPointerDownCapture}
     onPointerDown={(event) => { const target = event.target; if (event.button === 1 || (event.button === 0 && target instanceof Element && !target.closest('[data-interactive]'))) begin(event, null); }}
     onPointerMove={onPointerMove} onPointerUp={finish} onPointerCancel={cancel} onLostPointerCapture={cancel}>

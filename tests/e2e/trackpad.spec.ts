@@ -164,3 +164,54 @@ test("trackpad: portfolio pan and pinch persist locally without shifting project
   await page.getByRole("button", { name: "Карточки", exact: true }).click();
   await expect(scene).toHaveCount(0); await expect(page.locator('.saved-project-card')).toHaveCount(1);
 });
+
+for (const mode of ["editor", "portfolio"] as const) {
+  test(`trackpad: ${mode} restores the saved view after delayed scroll layout without saving zero`, async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 500 });
+    await create(page); const before = await current(page);
+    if (mode === "portfolio") {
+      await home(page); await page.getByRole("button", { name: "Таймлайн", exact: true }).click();
+    }
+    const selector = mode === "editor" ? ".timeline-body" : ".portfolio-body";
+    const scene = mode === "editor" ? page.getByRole("main", { name: "Редактор таймлайна" }) : page.getByLabel("Общий таймлайн проектов", { exact: true });
+    const body = page.locator(selector), viewport = scene.locator('.calendar-time');
+    const key = mode === "editor" ? `editor:${before.project.id}` : "workspace";
+    const persistedY = () => page.evaluate(key => new Promise<number>((resolve, reject) => {
+      const request = indexedDB.open("timeline-workspace-v2");
+      request.onerror = () => { reject(Error("Preferences DB unavailable")); };
+      request.onsuccess = () => {
+        const db = request.result, read = db.transaction("preferences").objectStore("preferences").get(key);
+        read.onerror = () => { db.close(); reject(Error("Preferences read failed")); };
+        read.onsuccess = () => {
+          const row = read.result as { value?: { cameraY?: number; portfolio?: { cameraY?: number } } } | undefined;
+          db.close(); resolve(row?.value?.cameraY ?? row?.value?.portfolio?.cameraY ?? -1);
+        };
+      };
+    }), key);
+    await wheel(viewport, 24, 30); await wheel(viewport, 0, -15, { ctrlKey: true });
+    await expect(body).toHaveJSProperty("scrollTop", 30);
+    await expect.poll(persistedY).toBe(30);
+    const final = await camera(scene);
+    // Calendar width is measurable while the scroll viewport is still unlaid out.
+    // This deterministically exposes the Safari race instead of extending timeouts.
+    await page.addInitScript(selector => {
+      const style = document.createElement("style"); style.id = "delayed-scroll-layout";
+      style.textContent = `${selector} { display: none !important; }`;
+      document.addEventListener("DOMContentLoaded", () => { document.head.append(style); }, { once: true });
+    }, selector);
+    await page.reload(); await saved(page); await expect(body).toBeAttached();
+    await body.evaluate(async el => {
+      await new Promise<void>(resolve => { requestAnimationFrame(() => { requestAnimationFrame(() => { resolve(); }); }); });
+      if (el.clientHeight !== 0) throw Error("Delayed layout fixture must not have a scroll viewport yet");
+    });
+    expect(await persistedY()).toBe(30);
+    await page.evaluate(() => { document.getElementById("delayed-scroll-layout")?.remove(); });
+    await expect(body).toHaveJSProperty("scrollTop", 30);
+    expect(await camera(scene)).toEqual(final);
+    await body.evaluate(el => { el.scrollTop = 15; });
+    await page.setViewportSize({ width: 1420, height: 500 });
+    await expect.poll(persistedY).toBe(15);
+    expect(await body.evaluate(el => el.scrollTop)).toBe(15);
+    expect(await documents(page)).toEqual([before]);
+  });
+}
