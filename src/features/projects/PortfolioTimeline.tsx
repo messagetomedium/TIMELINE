@@ -42,7 +42,6 @@ export function PortfolioTimeline({ documents, preferences, onPreferences, onOpe
   const viewport = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLDivElement>(null);
   const initialized = useRef(false);
-  const [viewReady, setViewReady] = useState(false);
   const [initialCameraY] = useState(() => preferences.cameraY ?? 0);
   const gesture = useRef<Gesture | null>(null);
   const bodyDown = useRef<{ x: number; y: number } | null>(null);
@@ -57,7 +56,7 @@ export function PortfolioTimeline({ documents, preferences, onPreferences, onOpe
   const navigation = useCanvasNavigation({ surface, viewport, body, camera, setCamera: navigateCamera,
     blocked: () => gesture.current !== null || rowDrag.current !== null, startPan: e => { begin(e, null); },
     onIdle: (next, cameraY) => { if (scrollRestored && (next !== preferences.camera || cameraY !== (preferences.cameraY ?? 0))) onPreferences({ ...preferences, camera: next, cameraY }); } });
-  const scrollRestored = useScrollRestoration(body, initialCameraY, viewReady, navigation.active || previewCamera !== null || previewDocument !== null || rowOrder !== null);
+  const scrollRestored = useScrollRestoration(body, initialCameraY, navigation.active || previewCamera !== null || previewDocument !== null || rowOrder !== null);
   const calendar = getCalendarGeometry(getVisibleDateRange(width, camera), preferences.step);
   const height = Math.max(360, documents.length * 64 + 64);
 
@@ -73,8 +72,6 @@ export function PortfolioTimeline({ documents, preferences, onPreferences, onOpe
           const next = cameraForFocusDate({ originDate: focus, pxPerDay: WORK_ZOOM, panX: 0 }, focus, entry.contentRect.width, 0.32);
           setLocalCamera({ source: preferences.camera, value: next }); onPreferences({ ...preferences, camera: next });
         }
-        // Scroll restoration separately observes the body's actual layout.
-        setViewReady(true);
       }
     });
     observer.observe(element);

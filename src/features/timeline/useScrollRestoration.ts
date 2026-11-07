@@ -2,7 +2,7 @@ import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 
 /** A measured calendar width does not imply that its flex scroll viewport is ready. */
-export function useScrollRestoration(body: RefObject<HTMLDivElement | null>, initialY: number, ready: boolean, active: boolean) {
+export function useScrollRestoration(body: RefObject<HTMLDivElement | null>, initialY: number, active: boolean) {
   const done = useRef(false);
   const [restored, setRestored] = useState(false);
   const complete = useCallback(() => {
@@ -14,7 +14,7 @@ export function useScrollRestoration(body: RefObject<HTMLDivElement | null>, ini
     if (active && !done.current) complete();
   }, [active, complete]);
   useLayoutEffect(() => {
-    if (!ready || restored || done.current) return;
+    if (restored || done.current) return;
     const node = body.current;
     if (!node) return;
     let frame: number | undefined;
@@ -60,6 +60,6 @@ export function useScrollRestoration(body: RefObject<HTMLDivElement | null>, ini
       node.removeEventListener("scroll", scrolled);
       for (const event of ["wheel", "touchstart", "pointerdown", "keydown"]) node.removeEventListener(event, complete);
     };
-  }, [body, initialY, ready, restored, complete]);
+  }, [body, initialY, restored, complete]);
   return restored;
 }

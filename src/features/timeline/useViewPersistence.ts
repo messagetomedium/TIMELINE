@@ -7,7 +7,7 @@ import { useScrollRestoration } from "./useScrollRestoration";
 export function useViewPersistence(body: RefObject<HTMLDivElement | null>, initialY: number, view: Omit<ViewPreferences, "cameraY">, ready: boolean, active: boolean, save: (id: ProjectId, view: ViewPreferences) => void) {
   const y = useRef(initialY), timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const latest = useRef<(() => void) | undefined>(undefined), sent = useRef("");
-  const restored = useScrollRestoration(body, initialY, ready, active);
+  const restored = useScrollRestoration(body, initialY, active);
   const flush = useCallback(() => {
     clearTimeout(timer.current); timer.current = undefined; latest.current?.();
   }, []);

@@ -98,9 +98,26 @@ test("trackpad: diagonal pan, anchored pinch including result gaps, coalescing a
   }), before.project.id);
   await expect.poll(persistedY).toBe(y); // Prove that F5 starts with the nonzero saved preference.
   expect(await current(page)).toEqual(before);
+  await page.addInitScript(() => {
+    const NativeObserver = window.ResizeObserver, pending: (() => void)[] = [];
+    let released = false;
+    window.ResizeObserver = class extends NativeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        super((entries, observer) => {
+          if (!released && entries.some(entry => entry.target.classList.contains("calendar-time"))) pending.push(() => { callback(entries, observer); });
+          else callback(entries, observer);
+        });
+      }
+    };
+    (window as unknown as { releaseCalendarMeasurement: () => void }).releaseCalendarMeasurement = () => {
+      released = true; for (const notify of pending.splice(0)) notify();
+    };
+  });
   await page.reload(); await saved(page);
   expect((await camera(scene)).zoom).toBeCloseTo(final.zoom, 8); expect((await camera(scene)).x).toBeCloseTo(final.x, 8);
+  // Vertical layout is usable even when the calendar's width callback is delayed.
   await expect.poll(() => body.evaluate(el => el.scrollTop)).toBe(y);
+  await page.evaluate(() => { (window as unknown as { releaseCalendarMeasurement: () => void }).releaseCalendarMeasurement(); });
   expect(await persistedY()).toBe(y);
   const navigatedY = y - 15;
   await body.evaluate((el, next) => { el.scrollTop = next; }, navigatedY);
