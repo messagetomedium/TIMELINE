@@ -62,10 +62,9 @@ jobs:
     container:
       image: mcr.microsoft.com/playwright:v1.64.1-noble
       # The restore regression still runs pg_dump/psql inside the PG17 service.
-      # Keep the runner's Docker CLI/socket available without an apt installation.
+      # Mount the CLI without apt; Actions already mounts /var/run/docker.sock.
       volumes:
         - /usr/bin/docker:/usr/bin/docker:ro
-        - /var/run/docker.sock:/var/run/docker.sock
     services:
       postgres:
         image: postgres:17
